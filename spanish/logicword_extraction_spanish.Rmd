@@ -17,8 +17,10 @@ library(feather)
 We use the package `r childesr` to access the data in the CHILDES database. The code below downloads and stores all utterances by children and parents:
 
 ```{r ChildesDBimports}
+
+# changed the data sets from "Eng-NA" and "Eng-UK" to "Spanish" to account for extracting the Spanish data set
 #Getting data from 1270 children in 73 corpora...
-all_english_tokens <- get_tokens(collection = c("Eng-NA","Eng-UK"), 
+all_english_tokens <- get_tokens(collection = c("Spanish"), 
                           role = c("target_child","Mother", "Father"),
                           token = "*")
 ```
@@ -26,7 +28,8 @@ all_english_tokens <- get_tokens(collection = c("Eng-NA","Eng-UK"),
 We save the downladed data as an RDS file for future use:
 
 ```{r}
-write_csv(all_english_tokens, "../raw_data/all_english_tokens.csv")
+#changed english to spanish
+write_csv(all_spanish_tokens, "../raw_data/all_spanish_tokens.csv")
 ```
 
 # Token Processing
