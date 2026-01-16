@@ -40,14 +40,14 @@ The following script cleans up the data to make tokens lower case and exclude to
 
 ```{r exclusionsTokens}
 # we should make sure all words are in lower case:
-all_english_tokens$gloss <- all_english_tokens$gloss %>% tolower()
+all_spanish_tokens$gloss <- all_spanish_tokens$gloss %>% tolower()
 
 # count the tokens before exclusions
-n_tokens_before_exclusions <- nrow(all_english_tokens)
+n_tokens_before_exclusions <- nrow(all_spanish_tokens)
 
 # number of children before exclusions
 n_chi_before_exclusions <-
-  all_english_tokens$target_child_id %>% unique() %>% length()
+  all_spanish_tokens$target_child_id %>% unique() %>% length()
 
 # It is possible to remove the unintelligible tokens. We don't, because we believe these are children's productions that may have been misunderstood or mis-transcribed. Removing them would bias the data against children's productions.
 
