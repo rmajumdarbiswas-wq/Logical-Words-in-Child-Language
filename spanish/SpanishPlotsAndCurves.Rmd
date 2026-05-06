@@ -1,106 +1,418 @@
 ---
-title: "English Plots"
-author: "Masoud Jasbi"
+title: "Spanish Plots"
+author: "Rajanya Majumdar Biswas"
 date: "`r Sys.Date()`"
 output: pdf_document
+
 ---
 
 ```{r packages, include=FALSE}
+
 library(tidyverse)
 library(feather)
 library(brms)
 library(ggeffects)
 library(ggrepel)
+library(feather) 
+library(arrow)
+
+
 ```
 
 ```{r}
+dir.create(“.../modeling”, showWarnings = FALSE, recursive = TRUE)
+dir.create(“.../processed_data”, showWarnings = FALSE, recursive = TRUE)
+```
+
+```{r}ge
 knitr::opts_chunk$set(error = TRUE)
 ```
 # Load Data
 
-```{r processedEnglishTokens}
-english_tokens_processed <- read_feather("../processed_data/english_tokens_processed.feather")
+```{r processedSpanishTokens}
+Spanish_tokens <- read_csv("processed_data/Spanish_tokens.csv")
 
-english_tokens_contract_processed <-
-read_feather("../processed_data/english_tokens_contract_processed.feather")
+#Spanish_tokens_processed <- read_feather("processed_data/Spanish_tokens_processed.feather")
 ```
+# for words in the list, copy the word to logicalTargets -- create a new column(copy the word family) --> if not, just label as nonlogical
+# create a column all nonlogical and change the cell in which it is logical
+#this codeshould be in the logicword_extraction 
 
 # Computing Cumulative Relative Frequencies
 
-## Function vs. Content Words
-
-Here we compute cumulative relative frequencies of function vs. content words by grouping by "syntactic category":
-
-```{r}
-syncategory_relfreq <-
-  english_tokens_contract_processed %>%
-  group_by(syncategory, age, speaker) %>%
-  summarise(freq=n()) %>%
-  group_by(speaker, age) %>%
-  mutate(total=sum(freq), relfreq=freq/sum(freq), pct=relfreq*100) %>%
-  group_by(syncategory, speaker) %>%
-  arrange(age) %>%
-  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total), cumulative_pct=cumulative_relfreq*100)
-
-saveRDS(syncategory_relfreq, "syncategory_relfreq.RDS")
-```
-
-## Individual Function Words
+## Individual Logical Words
 
 Here we compute cumulative relative frequencies for individual function words by groupingby "word":
 
+#functionword_relfreq 
+# go to fix this error 
+
+
+```{r}
+
+colnames(Spanish_tokens)
+table(Spanish_tokens$logical_word, useNA = "ifany")
+```
+```{r}
+
+# Step 1: Filter for target children and the logical words you want
+logical_targets <- c("no", "y", "o")  # list of words you want to plot
+
+functionword_relfreq <- Spanish_tokens %>%
+  filter(speaker_role == "target_child",
+         logical_word %in% logical_targets) %>%
+  group_by(target_child_id, target_child_age, logical_word) %>%
+  summarise(token_count = n(), .groups = "drop") %>%
+  arrange(target_child_id, target_child_age)
+
+# Step 2: Compute cumulative relative frequency per child
+functionword_relfreq <- functionword_relfreq %>%
+  group_by(target_child_id, logical_word) %>%
+  mutate(cumulative_ppt = cumsum(token_count)/sum(token_count)*1000) %>%
+  ungroup()
+
+# Step 3: Filter the word you want to plot
+Spanish_no_plot <- functionword_relfreq %>%
+  filter(logical_word == "no")
+
+# Step 4: Plot
+ggplot(Spanish_no_plot, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "loess", se = TRUE, color = "blue") +
+  labs(title = "Acquisition of 'no'",
+       x = "Age (months)",
+       y = "Cumulative Parts per Thousand") +
+  theme_bw()
+
+```
+```{r}
+# Check speaker_role values
+table(Spanish_tokens$speaker_role)
+
+# Check logical_word values
+table(Spanish_tokens$logical_word, useNA="ifany")
+
+# Check age
+summary(Spanish_tokens$target_child_age)
+
+# Check the number of rows after filtering
+Spanish_tokens %>%
+  filter(tolower(speaker_role) == "target_child", logical_word == "no") %>%
+  nrow()
+```
+#c("no")
+# should show relative frequency NOT the total frequency --> each month should have JUST one point 
+# also try to figure out what the ceiling effect is 
+```{r}
+# Step 1 & 2: Filter and aggregate
+functionword_relfreq <- Spanish_tokens %>%
+  filter(logical_word %in% logical_word, speaker_role == "Target_Child") %>%
+  group_by(target_child_id, target_child_age, logical_word) %>%
+  summarise(token_count = n(), .groups = "drop") %>%
+  arrange(target_child_id, target_child_age)
+
+# Step 3: Cumulative ppt per child per word
+functionword_relfreq <- functionword_relfreq %>%
+  group_by(target_child_id, logical_word) %>%
+  mutate(cumulative_ppt = cumsum(token_count)/sum(token_count)*1000) %>%
+  ungroup()
+
+  for(w in logical_words){
+    p <- functionword_relfreq %>% filter(logical_word == w) %>%
+      ggplot(aes(x = target_child_age, y = cumulative_ppt)) +
+      geom_point(size=2) +
+      geom_smooth(method="loess", se=TRUE, color="blue") +
+      labs(title = paste("Acquisition of", w),
+           x="Age (months)",
+           y="Cumulative Parts per Thousand") +
+      theme_bw()
+    print(p)
+  }
+
+
+
+# Step 4: Filter for 'no' and plot
+#Spanish_no_plot <- functionword_relfreq %>%
+ # filter(logical_word == "no")
+
+# Check the data
+#head(Spanish_no_plot)
+
+# Step 5: Plot
+#ggplot(Spanish_no_plot, aes(x = target_child_age, y = cumulative_ppt)) +
+  #geom_point(size = 2) +
+  #geom_smooth(method = "loess", se = TRUE, color = "blue") +
+ # labs(title = "Acquisition of 'no'", x = "Age (months)", y = "Cumulative Parts per Thousand") +
+  #theme_bw()
+
+```
+
+
+```{r negation_no}
+functionword_relfreq %>%
+  filter(logical_word=="no") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() + 
+  facet_grid(.~speaker_role)  +
+  theme_bw() + 
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r Neg_No_Growth_Model, include=FALSE}
+neg_no_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, word=="no", speaker=="child"),
+  prior = c(
+    prior(uniform(0, 40), nlpar = "upperAsymptote", lb = 0, ub = 40),
+    prior(uniform(0, 5), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  file = "../modeling/neg_no_lagModel",
+  iter = 10000)
+```
+
+```{r age_of_production}
+age_of_production<- 
+  data.frame(word = c("no"), 
+           Estimate = c(round(fixef(neg_no_lagModel)[3,1],1)),
+           Est.Error = c(round(fixef(neg_no_lagModel)[3,2],1)),
+           Q2.5 = c(round(fixef(neg_no_lagModel)[3,3],1)),
+           Q97.5 = c(round(fixef(neg_no_lagModel)[3,4],1))
+           )
+```
+
+```{r neg_no_predictions}
+neg_no_predictions <- as.data.frame(fitted(neg_no_lagModel))
+
+neg_no_childdata <- filter(functionword_relfreq, word=="no", speaker=="child")
+neg_no_childdata$predictions <- neg_no_predictions[, "Estimate"]
+
+saveRDS(neg_no_childdata, "../processed_data/neg_no_childdata.RDS")
+```
+
+```{r neg_no_prediction_Plot} 
+no_plot <-
+  ggplot(neg_no_childdata, aes(x = age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="No", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+```{r}
+Spanish_no_plot <- Spanish_tokens %>%
+   ungroup() %>% 
+  filter(logical_word == "no", speaker_id == "target_child")
+
+ggplot(Spanish_no_plot, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(size = 2) +
+  geom_smooth(method = "loess", se = TRUE, color = "blue") +
+  labs(title = "Acquisition of 'no'", x = "Age (months)", y = "Cumulative Parts per Thousand") +
+  theme_bw()
+```
+
+
+
+
+
 ```{r}
 functionword_relfreq <-
-  english_tokens_contract_processed %>%
-  group_by(word, age, speaker) %>%
-  summarise(freq=n()) %>%
-  group_by(speaker, age) %>%
-  mutate(total=sum(freq), relfreq=freq/sum(freq), ppt=relfreq*1000) %>%
-  group_by(word, speaker) %>%
-  arrange(age) %>%
-  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total), cumulative_ppt=cumulative_relfreq*1000)
+  Spanish_tokens %>%
+  #filter(syncategory == "logical_label")
+  group_by(gloss, target_child_age, speaker_id) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  group_by(speaker_id, target_child_age) %>%
+  mutate(total = sum(freq), relfreq = freq/sum(freq), ppt = relfreq*1000) %>%
+  group_by(gloss, speaker_id) %>%
+  arrange(target_child_age) %>%
+  mutate(
+    cum_freq = cumsum(freq),
+    cum_total = cumsum(total),
+    cumulative_relfreq = cum_freq/cum_total,
+    cumulative_ppt = cumulative_relfreq*1000
+  )
+```
 
+```{r}
 saveRDS(functionword_relfreq, "functionword_relfreq.RDS")
+#functionword_relfreq <-
+ # group_by(word, age, speaker) %>%
+ # summarise(freq=n()) %>%
+ # group_by(speaker, age) %>%
+ # mutate(total=sum(freq), relfreq=freq/sum(freq), ppt=relfreq*1000) %>%
+ # group_by(word, speaker) %>%
+ # arrange(age) %>%
+#  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total), cumulative_ppt=cumulative_relfreq*1000)
+
+#saveRDS(functionword_relfreq, "functionword_relfreq.RDS")
 ```
 
 ## Function Word Semantic Categories
-
-Here we compute cumulative relative frequencies by semantic categories we have created. However, we have not planned any analyses of these yet.
-
+```{r logicalword_relfreq}
+# Define the logical words of interest (matching what you annotated earlier)
+logical_targets <- c("y","o","u","no","nunca","nadie","nada","ningún","si")
+```
+# Filter corpus for only logical words and compute frequencies
 ```{r}
-wordcategory_relfreq <-
-  english_tokens_contract_processed %>%
-  group_by(word_category, age, speaker) %>%
-  summarise(freq=n()) %>%
+logicalword_relfreq <- Spanish_tokens_processed %>%
+  filter(gloss %in% Spanish_tokens_processed) %>%
+  group_by(gloss, age, speaker) %>%
+  summarise(freq = n(), .groups = "drop") %>%
   group_by(speaker, age) %>%
-  mutate(total=sum(freq), relfreq=freq/sum(freq), ppt=relfreq*1000) %>%
-  group_by(word_category, speaker) %>%
+  mutate(total = sum(freq),
+         relfreq = freq/total * 100,  # percent of tokens per speaker-age
+         ppt = relfreq * 10) %>%       # scaled per thousand tokens, optional
+  group_by(gloss, speaker) %>%
   arrange(age) %>%
-  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total))
-
-saveRDS(wordcategory_relfreq, "wordcategory_relfreq.RDS")
+  mutate(cum_freq = cumsum(freq),
+         cum_total = cumsum(total),
+         cumulative_relfreq = cum_freq / cum_total,
+         cumulative_ppt = cumulative_relfreq*1000)
 ```
 
-## Function Word Syntactic Categories
+```{r}
+# Save the results for later use
+saveRDS(logicalword_relfreq, "logicalword_relfreq.RDS")
+```
+```{r}
+# Quick check
+head(logicalword_relfreq)
+#Here we compute cumulative relative frequencies by semantic categories we have created. 
+#However, we have not planned any analyses of these yet.
+```
 
-We have not yet looked at the emergence of different syntactic categories
-
-# Plots and Growth Curves
-
-## Content vs. Function Word Production
-
-The graph below shows percent word category (content vs. function word) in each monthly been during the development of the child for parents and children.
 
 ```{r}
-syncategory_relfreq %>%
-  filter(syncategory=="Function") %>%
+function_words_plot <-
+  syncategory_relfreq %>%
+  filter(syncategory=="logical_label") %>%
   ggplot(aes(age, pct)) +
   geom_point() +
   facet_grid(.~speaker) +
   theme_bw() +
   xlab("Age (Months)") + ylab("Percentage") + 
   scale_y_continuous(limits = c(0, 100)) +
+  theme(text = element_text(size = 14))
+```
+
+```{r}
+#wordcategory_relfreq <-
+ # Spanish_tokens_contract_processed %>%
+ # group_by(word_category, age, speaker) %>%
+ # summarise(freq=n()) %>%
+ # group_by(speaker, age) %>%
+#  mutate(total=sum(freq), relfreq=freq/sum(freq), ppt=relfreq*1000) %>%
+ # group_by(word_category, speaker) %>%
+ # arrange(age) %>%
+  #mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total))
+
+#saveRDS(wordcategory_relfreq, "wordcategory_relfreq.RDS")
+```
+
+## Function Word Syntactic Categories
+
+We have not yet looked at the emergence of different syntactic categories
+
+
+# Plots and Growth Curves
+
+# regular plot for negation 'no'
+```{r}
+functionword_relfreq %>%
+  filter(stem == "no", speaker == "target_child") %>%
+  ggplot(aes(x = age, y = cumulative_ppt)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess", se = TRUE) +
+  labs(
+    title = "Acquisition of 'no'",
+    x = "Age (months)",
+    y = "Cumulative frequency"
+  )
+```
+# y(and)
+
+
+```{r}
+functionword_relfreq %>%
+  filter(stem == "y", speaker == "target_child") %>%
+  ggplot(aes(x = age, y = cumulative_ppt)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess", se = TRUE) +
+  labs(
+    title = "Acquisition of 'y'",
+    x = "Age (months)",
+    y = "Cumulative frequency"
+  )
+```
+
+# o(and)
+
+
+```{r}
+functionword_relfreq %>%
+  filter(stem == "o", speaker == "target_child") %>%
+  ggplot(aes(x = age, y = cumulative_ppt)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "loess", se = TRUE) +
+  labs(
+    title = "Acquisition of 'o'",
+    x = "Age (months)",
+    y = "Cumulative frequency"
+  )
+```
+```{r}
+
+ggplot(functionword_relfreq, aes(x = age, y = cumulative_ppt)) +
+  geom_point()
+```
+```{r}
+library(dplyr)
+
+Spanish_tokens %>%
+  filter(logical_word == "no") %>%
+  group_by(speaker) %>%
+  summarise(
+    token_count = n(),
+    .groups = "drop"
+  )
+```
+## Content vs. Function Word Production
+
+The graph below shows percent word category (content vs. function word) in each monthly been during the development of the child for parents and children.
+
+```{r}
+
+logicalword_relfreq %>%
+  ggplot(aes(age, relfreq, color = gloss)) +
+  geom_point() + 
+  geom_line() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + 
+  ylab("Relative Frequency (%)") + 
   theme(text = element_text(family = "Times New Roman", size = 10))
+
+#syncategory_relfreq %>%
+#  filter(syncategory=="Function") %>%
+#  ggplot(aes(age, pct)) +
+#  geom_point() +
+ # facet_grid(.~speaker) +
+ # theme_bw() +
+ # xlab("Age (Months)") + ylab("Percentage") + 
+ # scale_y_continuous(limits = c(0, 100)) +
+ # theme(text = element_text(family = "Times New Roman", size = 10))
 ```
 
 ```{r Neg_No_Growth_Model, include=FALSE}
@@ -849,7 +1161,7 @@ functionword_relfreq %>%
 ```
 
 ```{r}
-english_tokens_processed %>%
+Spanish_tokens_processed %>%
   filter(word=="or", age<20, speaker=="child")
 ```
 
