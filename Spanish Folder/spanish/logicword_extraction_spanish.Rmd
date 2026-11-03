@@ -1,0 +1,807 @@
+---
+title: "Extracting Function Words of Interest from Childes"
+author: "Masoud Jasbi"
+date: "`r Sys.Date()`"
+output: pdf_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(childesr)   # package for getting child language data
+library(progressr)  # handles progress bars for childesr data fetching
+library(tidyverse)  # package for data wrangling
+library(feather)    # package to store large files memory-efficiently
+library(ggplot2)    # package for plotting
+
+
+  
+
+```
+
+# Loading Data from Childes-DB
+
+We use the package `r childesr` to access the data in the CHILDES database. The code below downloads and stores all utterances by children and parents:
+
+```{r ChildesDBimports}
+#Getting data from 529 children in 22 corpora...
+all_Spanish_tokens <- get_tokens(collection = c("Spanish"), 
+                          role = c("target_child","Mother", "Father"),
+                          token = "*")
+```
+
+We save the downloaded data as an RDS file for future use:
+
+```{r}
+write_csv(all_Spanish_tokens, "processed_data/all_Spanish_tokens.csv")
+
+```
+
+#load the tokens 
+```{r}
+Spanish_tokens <- read.csv("C:/Spanish Folder/spanish/processed_data/Spanish_tokens.csv")
+```
+
+
+# Token Processing
+
+#Child utterances 
+
+```{r ChildesDButterances}
+
+all_Spanish_utterances <- get_utterances(
+  collection = "Spanish",
+  role = c("target_child", "Mother", "Father")
+)
+# Save the raw utterances dataframe to your processed data folder
+write_csv(all_Spanish_utterances, "processed_data/all_Spanish_utterances.csv")
+```
+
+## Exclusions
+
+The following script cleans up the data to make tokens lower case and exclude #tokens above 72 months of the child's age. All exclusions are stored in a file #called exclusions.csv
+
+```{r exclusionsTokens}
+# we should make sure all words are in lower case:
+#all_Spanish_tokens$gloss <- all_Spanish_tokens$gloss %>% tolower()
+
+all_Spanish_tokens <- all_Spanish_tokens %>% mutate(gloss = tolower(gloss))
+
+# count the tokens before exclusions
+n_tokens_before_exclusions <- nrow(all_Spanish_tokens)
+
+# number of children before exclusions
+n_chi_before_exclusions <-
+  all_Spanish_tokens$target_child_id %>% unique() %>% length()
+
+# removing rows for which age information for the child does not exist
+Spanish_tokens <- 
+  all_Spanish_tokens %>% drop_na(target_child_age)
+
+# count the tokens after removing NA tokens
+n_tokens_ageNAs_removed <- nrow(Spanish_tokens)
+
+# number of children after excluding NAs
+n_chi_ageNAs_removed <-
+  Spanish_tokens$target_child_id %>% unique() %>% length()
+
+#Take out data for the age range above 6 years
+Spanish_tokens <-
+  Spanish_tokens %>%
+  filter(target_child_age < 72)
+
+# count the tokens after excluding the below 1 and older than 6 age range
+n_tokens_ageOver72mo_removed <- nrow(Spanish_tokens)
+
+# number of children left after exclusions
+n_chi_ageOver72mo_removed <-
+  Spanish_tokens$target_child_id %>% unique() %>% length()
+
+# record the dataframe of exclusions
+exclusions <-
+  data.frame (
+    n_tokens_before_exclusions = n_tokens_before_exclusions,
+    n_after_ageNAs = n_tokens_ageNAs_removed,
+    n_after_age72mo = n_tokens_ageOver72mo_removed,
+    missing_age = n_tokens_before_exclusions - n_tokens_ageNAs_removed,
+    Over72mo = n_tokens_ageNAs_removed - n_tokens_ageOver72mo_removed,
+    n_chi_total = n_chi_before_exclusions,
+    n_chi_ageNAs = n_chi_ageNAs_removed,
+    n_chi_age72over = n_chi_ageOver72mo_removed)
+```
+
+this saves the filtered data in a csv file
+
+```{r savingData}
+# save the exclusion data in a file as well as the final data
+write_csv(Spanish_tokens, "processed_data/Spanish_tokens.csv")
+write_csv(exclusions, "../processed_data/exclusions.csv")
+#write_csv(exclusions, "../raw_data/exclusions_summary.csv")
+#write_csv(Spanish_tokens, "../raw_data/Spanish_tokens_excluded.csv")
+```
+
+
+```{r}
+all_Spanish_utterances <- all_Spanish_utterances %>%
+  mutate(id = as.numeric(id), transcript_id = as.numeric(transcript_id))
+
+isolated_nos <- Spanish_tokens %>%
+  filter(gloss == "no" | stem == "no") %>%
+  filter(is.na(part_of_speech) | part_of_speech == "")
+
+nrow(isolated_nos)
+
+nos_context <- isolated_nos %>%
+  select(token_id = id, utterance_id, utterance_type) %>%
+  left_join(
+    all_Spanish_utterances %>% select(utterance_id = id, utt_gloss = gloss),
+    by = "utterance_id"
+  )
+
+```
+
+// put all utterances in it with no in its single category put them in discourse -- this category essentially counts each part of speech
+```{r}
+
+Spanish_tokens %>%
+  filter(gloss %in% c("no") | stem %in% c("no")) %>%
+  count(part_of_speech)
+```
+this chunk of code takes the tagged part of speech and restricts it to the one that does not have a category
+
+
+this is important for later processing
+
+
+
+
+```{r}
+# 1. Filter out the specific rows where part_of_speech is NA
+Spanish_tokens %>% distinct(part_of_speech)
+```
+# this chunk of code takes the tagged part of speech and restricts it to the one that does not have a category
+
+
+
+
+
+
+
+
+#checks if the unlabeled nos have punctuation in them(only 60 of them do)
+```{r}
+
+nos_context %>%
+  summarise(
+    total = n(),
+    punct_in_text = sum(str_detect(utt_gloss, "[[:punct:]¿¡,.]"), na.rm = TRUE),
+    has_terminator = sum(!is.na(utterance_type))
+  )
+
+
+```
+
+# this line of code shows the utterances that came before the untagged 3341 to give context into eventually categorizing the data in sentential versus discourse, can use prior utterances to help with this classification
+
+
+
+
+```{r}
+utts <- all_Spanish_utterances %>%
+  arrange(transcript_id, id) %>%
+  group_by(transcript_id) %>%
+  mutate(utt_order = row_number()) %>%
+  ungroup() %>%
+  select(utterance_id = id, transcript_id, utt_order,
+         speaker_role, gloss, type)
+
+nos_in_context <- isolated_nos %>%
+  select(token_id = id, utterance_id, token_order, target_child_age) %>%
+  left_join(
+    utts %>% rename(target_role = speaker_role,
+                    target_gloss = gloss, target_type = type),
+    by = "utterance_id"
+  ) %>%
+  left_join(
+    utts %>% transmute(transcript_id, utt_order = utt_order + 1,
+                       prev_role = speaker_role, prev_gloss = gloss,
+                       prev_type = type),
+    by = c("transcript_id", "utt_order")
+  ) %>%
+  left_join(
+    utts %>% transmute(transcript_id, utt_order = utt_order - 1,
+                       next_role = speaker_role, next_gloss = gloss),
+    by = c("transcript_id", "utt_order")
+  ) %>%
+  select(token_id, token_order, target_child_age, prev_role, prev_gloss,
+         prev_type, target_role, target_gloss, target_type,
+         next_role, next_gloss)
+
+nrow(nos_in_context)
+View(nos_in_context)
+```
+
+#this chunk of nos contextualize the 3341 nos by seeing if the previous utterance in a question 
+```{r}
+nos_coding <- nos_in_context %>%
+  mutate(
+    n_words = str_count(target_gloss, "\\S+"),
+    same_speaker = prev_role == target_role,
+    prev_is_question = prev_type == "question",
+    code = ""
+  )
+
+write_csv(nos_coding, "processed_data/nos_to_code.csv")
+
+count(nos_coding, same_speaker, prev_is_question)
+```
+
+## Coding Speaker Roles
+```{r}
+
+# Isolate the 3,341 unclassified "no" tokens
+isolated_nos <- Spanish_tokens %>%
+  filter(gloss == "no" | stem == "no") %>%
+  filter(is.na(part_of_speech))
+
+# View the isolated data
+View(isolated_nos)
+```
+#something about this means to weigh items out(?)
+#Draw a hand-coding sample. We pulled 107 random rows, sampled across kinds of context, to code by hand. This is how we’ll measure accuracy.
+#Write rules. A bare “no” (or “no no”) is discourse. “No” before a verb or clause word is sentential. For the tagged tokens, we also used the part of speech of the neighboring words. Anything the rules couldn’t place stays unclassified, and we didn’t force a label on it.
+```{r}
+nos_coding <- nos_in_context %>%
+  mutate(
+    n_words = str_count(target_gloss, "\\S+"),
+    same_speaker = prev_role == target_role,
+    prev_is_question = prev_type == "question"
+  )
+
+set.seed(1)
+nos_sample <- nos_coding %>%
+  group_by(same_speaker, prev_is_question) %>%
+  slice_sample(n = 25) %>%
+  ungroup() %>%
+  arrange(target_gloss) %>%
+  mutate(code = "") %>%
+  select(token_id, token_order, prev_gloss, target_gloss, next_gloss,
+         target_type, same_speaker, prev_is_question, code)
+
+write_csv(nos_sample, "processed_data/nos_sample.csv")
+nrow(nos_sample)
+```
+
+
+#sample all the processes
+```{r}
+nos_sample %>%
+  select(token_id, prev_gloss, target_gloss, next_gloss, target_type) %>%
+  slice(1:40) %>%
+  format_csv() %>%
+  cat()
+```
+
+Cleans the utterance text by lowercasing it and trimming extra spaces.
+Labels an utterance D (discourse) if it is only “no” repeated, like “no” or “no no”.
+Labels an utterance S (sentential) if it has 3 or more words and “no” sits next to a clause word, like “no quiero” or “aquí no”.
+Marks everything else as review, meaning no rule fit.
+Prints a count of D, S, and review at the end.
+Labels the whole utterance, so every “no” in it gets the same label.
+The clause-word lists are short, so many tokens land in review.
+
+```{r}
+nos_auto <- nos_coding %>%
+  mutate(
+    g = str_squish(str_to_lower(target_gloss)),
+    only_no = str_detect(g, "^(no\\s*)+$"),
+    clause_no = str_detect(g, "\\bno (me|te|se|le|lo|la|nos|les|hay|es|está|sé|quiero|puedo|tiene|va|voy|cabe|dice)\\b") |
+                str_detect(g, "\\b(aquí|así|ahí|ese|este|esto|eso|porque|yo|ya) no\\b"),
+    other_no = str_detect(g, "\\bno\\b") & !str_detect(g, "^(no\\s*)+$"),
+    auto_label = case_when(
+      only_no ~ "D",
+      clause_no & n_words >= 3 ~ "S",
+      TRUE ~ "review"
+    )
+  )
+
+count(nos_auto, auto_label)
+```
+#this is just a quick spot check to see how the filtering is going
+```{r}
+set.seed(2)
+nos_auto %>%
+  group_by(auto_label) %>%
+  slice_sample(n = 30) %>%
+  ungroup() %>%
+  select(auto_label, prev_gloss, target_gloss) %>%
+  arrange(auto_label) %>%
+  print(n = 90)
+```
+
+
+# this is the first part of the organizing
+#first pass of the tagged set(the nos that did not have a null part of speech)
+```{r}
+classify_no <- function(df) {
+  df %>%
+    mutate(
+      g = str_squish(str_to_lower(target_gloss)),
+      n_words = str_count(g, "\\S+"),
+      only_no = str_detect(g, "^(no\\s*)+$"),
+      clause_no = str_detect(g, "\\bno (me|te|se|le|lo|la|nos|les|hay|es|está|sé|quiero|puedo|tiene|va|voy|cabe|dice)\\b") |
+                  str_detect(g, "\\b(aquí|así|ahí|ese|este|esto|eso|porque|yo|ya) no\\b"),
+      auto_label = case_when(
+        only_no ~ "D",
+        clause_no & n_words >= 3 ~ "S",
+        TRUE ~ "review"
+      )
+    )
+}
+
+tagged_auto <- Spanish_tokens %>%
+  filter(gloss == "no" | stem == "no") %>%
+  filter(!is.na(part_of_speech), part_of_speech != "") %>%
+  select(token_id = id, utterance_id, token_order, part_of_speech, target_child_age) %>%
+  left_join(
+    utts %>% select(utterance_id, target_gloss = gloss, target_type = type),
+    by = "utterance_id"
+  ) %>%
+  classify_no()
+
+count(tagged_auto, auto_label)
+```
+
+For each tagged “no”, this chunk looks up the word right before it and the word right after it, along with their part-of-speech tags.
+It does that by making two copies of the token table, one shifted back by one position and one shifted forward by one, then matching them to each “no”.
+It then records where the “no” sits in its utterance:
+alone: nothing before or after, so the utterance is only “no”
+initial: at the start
+final: at the end
+medial: in the middle
+The last line counts the “no”s still marked review by position and next word’s tag. This showed which patterns were worth writing rules for.
+It doesn’t label anything itself. It only collects the neighbor information that the later labeling chunks use.
+
+
+```{r}
+
+ctx <- Spanish_tokens %>%
+  select(utterance_id, token_order, pos = part_of_speech, w = gloss)
+
+nxt <- ctx %>% transmute(utterance_id, token_order = token_order - 1,
+                         next_pos = pos, next_w = w)
+prv <- ctx %>% transmute(utterance_id, token_order = token_order + 1,
+                         prev_pos = pos, prev_w = w)
+
+tagged_deep <- tagged_auto %>%
+  left_join(nxt, by = c("utterance_id", "token_order")) %>%
+  left_join(prv, by = c("utterance_id", "token_order")) %>%
+  mutate(position = case_when(
+    is.na(prev_w) & is.na(next_w) ~ "alone",
+    is.na(next_w)                 ~ "final",
+    is.na(prev_w)                 ~ "initial",
+    TRUE                          ~ "medial"
+  ))
+
+tagged_deep %>% filter(auto_label == "review") %>%
+  count(position, next_pos, sort = TRUE) %>% print(n = 30)
+```
+
+#this is just a quick check of the position logic that was done above
+
+```{r}
+tagged_deep %>%
+  filter(position == "alone") %>%
+  summarise(n = n(), with_next_word = sum(!is.na(next_w)), with_prev_word = sum(!is.na(prev_w)))
+```
+
+
+Makes a list of Spanish clitic pronouns (me, te, se, le, lo, la, los, las, nos, les, os).
+Creates a second label, deep_label, from the first one (auto_label) using the tag of the word right after the “no”.
+Keeps any D or S label the first pass already gave.
+For tokens still marked review, labels them S if the next word is a verb or auxiliary, or a clitic pronoun (“no quiero”, “no lo sé”).
+Leaves the rest as review.
+
+Prints a count of how each first-pass label turned into a second-pass label.
+Your run moved 9,664 review tokens to S and left 11,009 in review, and D and S from the first pass stayed the same.
+This rule treats “no” before a verb as sentential. That fails for a reply followed by a new clause (“no, mira”), so some of the new S labels are probably wrong.
+
+
+```{r}
+clitics <- c("me", "te", "se", "le", "lo", "la", "los", "las", "nos", "les", "os")
+
+tagged_deep <- tagged_deep %>%
+  mutate(
+    deep_label = case_when(
+      auto_label != "review" ~ auto_label,
+      next_pos %in% c("verb", "aux") ~ "S",
+      next_pos == "pron" & str_to_lower(next_w) %in% clitics ~ "S",
+      TRUE ~ "review"
+    )
+  )
+
+count(tagged_deep, auto_label, deep_label)
+```
+
+#this is just another sampling to check how the rules are doing 
+
+```{r}
+set.seed(4)
+tagged_deep %>%
+  filter(auto_label == "review", deep_label == "S") %>%
+  slice_sample(n = 30) %>%
+  select(prev_w, target_gloss, next_w)
+```
+
+
+looking at what's left:
+It takes the tagged “no”s still marked review where the “no” is the last word of the utterance (position == "final").
+It counts what comes right before the “no”, first by part-of-speech tag and then by the actual word.
+It prints the counts and changes nothing. The counts showed that “que”, “o”, and pronouns or adverbs were the most common words before a final “no”.
+
+```{r}
+fin <- tagged_deep %>% filter(deep_label == "review", position == "final")
+
+count(fin, prev_pos, sort = TRUE) %>% print(n = 15)
+count(fin, prev_w, sort = TRUE) %>% print(n = 30)
+```
+```{r}
+tagged_deep <- tagged_deep %>%
+  mutate(
+    pw = str_to_lower(prev_w),
+    final_label = case_when(
+      deep_label != "review" ~ deep_label,
+      position != "final" ~ "review",
+      pw %in% c("no", "pues", "pero") ~ "review",
+      prev_pos == "intj" ~ "D",
+      pw == "o" ~ "o_no",
+      pw == "que" ~ "que_no",
+      pw %in% c("porque", "porqué", "si") ~ "S",
+      prev_pos %in% c("pron", "adv") ~ "S",
+      TRUE ~ "review"
+    )
+  )
+
+count(tagged_deep, final_label)
+```
+
+
+It builds a third label, final_label, with rules checked in order:
+
+Keep any D or S label from the earlier passes.
+Leave “no”s that aren’t final as review.
+If the word before is “no”, “pues”, or “pero”, leave it as review.
+If the word before is an interjection (like “ah” or “oh”), label it D.
+If the word before is “o” (“or”), label it o_no.
+If the word before is “que”, label it que_no.
+If the word before is “porque”, “porqué”, or “si”, label it S.
+If the word before is a pronoun or adverb (“yo no”, “aquí no”), label it S.
+
+Everything else just stays in review 
+```{r}
+verb_words <- tagged_deep %>%
+  filter(next_pos %in% c("verb", "aux")) %>%
+  count(next_w, sort = TRUE) %>%
+  slice_head(n = 200) %>%
+  pull(next_w) %>%
+  str_to_lower()
+verb_words <- verb_words[str_detect(verb_words, "^[[:alpha:]áéíóúñü]+$")]
+
+verb_pat <- paste0("\\bno (", paste(verb_words, collapse = "|"), ")\\b")
+
+nos_auto2 <- nos_auto %>%
+  mutate(
+    auto_label2 = case_when(
+      auto_label != "review" ~ auto_label,
+      str_detect(g, verb_pat) ~ "S",
+      TRUE ~ "review"
+    )
+  )
+
+count(nos_auto, auto_label) %>%
+  left_join(count(nos_auto2, auto_label2), by = c("auto_label" = "auto_label2"))
+```
+
+
+```{r}
+tagged_out <- tagged_deep %>%
+  transmute(
+    set = "tagged",
+    token_id = as.character(token_id),
+    utterance_id = as.character(utterance_id),
+    token_order, target_child_age,
+    part_of_speech,
+    utterance = target_gloss,
+    utterance_type = target_type,
+    position,
+    prev_word = prev_w, prev_pos,
+    next_word = next_w, next_pos,
+    prev_utterance = NA_character_, next_utterance = NA_character_,
+    label = final_label,
+    rule = case_when(
+      auto_label != "review" & only_no ~ "1_bare_no",
+      auto_label != "review"           ~ "1_clause_wordlist",
+      deep_label != "review"           ~ "2_next_word_tag",
+      final_label != "review"          ~ "3_final_prev_word",
+      TRUE                             ~ "none"
+    )
+  )
+
+untagged_out <- nos_auto2 %>%
+  transmute(
+    set = "untagged",
+    token_id = as.character(token_id),
+    utterance_id = NA_character_,
+    token_order, target_child_age,
+    part_of_speech = NA_character_,
+    utterance = target_gloss,
+    utterance_type = target_type,
+    position = NA_character_,
+    prev_word = NA_character_, prev_pos = NA_character_,
+    next_word = NA_character_, next_pos = NA_character_,
+    prev_utterance = prev_gloss, next_utterance = next_gloss,
+    label = auto_label2,
+    rule = case_when(
+      auto_label == "D"  ~ "1_bare_no",
+      auto_label == "S"  ~ "1_clause_wordlist",
+      auto_label2 == "S" ~ "2_verb_list",
+      TRUE               ~ "none"
+    )
+  )
+
+all_nos <- bind_rows(tagged_out, untagged_out) %>%
+  mutate(
+    age_bin = cut(target_child_age, breaks = seq(0, 72, by = 12)),
+    hand_code = NA_character_,
+    validated = FALSE
+  ) %>%
+  arrange(set, token_id)
+
+nrow(all_nos)
+count(all_nos, set, label)
+
+write_csv(all_nos, "processed_data/all_nos_labeled.csv")
+```
+
+
+Puts every “no” token (tagged and untagged) into one table
+
+Columns include: token/utterance ids, utterance text, position, neighbor words and POS tags, final label
+rule column = which step assigned the label (1 = first-pass rules, 2 = next-word or verb-list rule, 3 = previous-word rule, none = unlabeled)
+
+Untagged rows have NA for POS and neighbor-word columns, but keep the previous and next utterance text
+Adds age_bin (12-month groups), an empty hand_code column for your labels, and validated = FALSE
+Prints the row count (54,028) and counts by set and label
+
+Saves all_nos_labeled.csv, which the plotting file reads to split “no” into sentential, discourse, and unclassified
+
+Rerun this chunk after changing any labeling rule
+
+```{r}
+
+rev <- tagged_deep %>% filter(final_label == "review")
+
+count(rev, position)
+
+rev %>% filter(position != "final") %>% count(next_pos, sort = TRUE) %>% print(n = 15)
+rev %>% filter(position == "final") %>% count(prev_pos, sort = TRUE) %>% print(n = 15)
+```
+```{r}
+set.seed(7)
+rev %>%
+  slice_sample(n = 40) %>%
+  select(position, prev_w, target_gloss, next_w) %>%
+  View()
+
+set.seed(8)
+nos_auto2 %>%
+  filter(auto_label2 == "review") %>%
+  slice_sample(n = 40) %>%
+  select(prev_gloss, target_gloss) %>%
+  View()
+```
+
+
+#THIS IS THE PART THAT NEEDS THE MOST WORK 
+Forces a D or S label onto the 8,276 tagged “no”s still marked review
+Looks at the word next to the “no” to make a guess (e.g., “no” + noun → S, “no” + name → D)
+If no guess fits, uses a default label (set to D)
+basis3 records how each label was decided: earlier rule, guess, or default
+The 3,107 default rows are arbitrary, so don’t treat them as real findings
+Guesses are not checked against hand coding
+
+
+```{r}
+default_label_t <- "D"   # rerun with "S" to see how much the default moves the totals
+
+tagged_deep3 <- tagged_deep %>%
+  mutate(
+    guess = case_when(
+      final_label != "review" ~ NA_character_,
+      position != "final" & next_pos %in% c("intj", "propn", "sconj", "cconj") ~ "D",
+      position != "final" & next_pos %in% c("noun", "adj", "det", "adp", "adv", "num") ~ "S",
+      position == "final" & prev_pos %in% c("propn", "intj", "verb", "aux", "adj") ~ "D",
+      TRUE ~ NA_character_
+    ),
+    label3 = case_when(
+      final_label != "review" ~ final_label,
+      !is.na(guess)           ~ guess,
+      TRUE                    ~ default_label_t
+    ),
+    basis3 = case_when(
+      final_label != "review" ~ "earlier_rule",
+      !is.na(guess)           ~ "guess_rule",
+      TRUE                    ~ "default"
+    )
+  ) %>%
+  select(-guess)
+
+count(tagged_deep3, basis3, label3)
+```
+
+
+Here we group mothers and fathers together as "parents".
+
+```{r}
+Spanish_tokens <- read_csv("processed_data/Spanish_tokens.csv")
+```
+This collapses the mother and father into one
+```{r}
+# Collapse mothers and fathers into parents
+Spanish_tokens$speaker <- "parent"
+Spanish_tokens$speaker[Spanish_tokens$speaker_role=="Target_Child"] <- "child"
+```
+
+```{r}
+"speaker" %in% names(Spanish_tokens)
+```
+
+## Coding Logical Words
+
+Create a list of logical words in Spanish that we are interested in studying:
+
+```{r}
+# Define logical words of interest based on study design
+logical_words <- c(
+  "y",        # coordination (and)
+  "o",        # disjunction (or)
+  "u",        # phonological variant of "o"
+  "no",       # negation
+  "nunca",    # negation
+  "nadie",    # negation
+  "nada",     # negation
+  "ningún",   # negation
+  "ningun",   # accentless variant (common in corpora)
+  "si",       # conditional (if)
+  "sí"        # possible accented form
+)
+
+
+```
+
+
+
+We create a new column called "logical_words" that codes whether the token is the specific logical word we are interseted in or not.
+
+```{r}
+Spanish_tokens <- read_csv("processed_data/Spanish_tokens.csv")
+
+# Add logical column
+Spanish_tokens <- Spanish_tokens %>%
+  mutate(logical = gloss %in% logical_words)
+
+# Verify it
+head(Spanish_tokens$logical)
+
+# Save the updated dataframe
+write_csv(Spanish_tokens, "processed_data/Spanish_tokens.csv")
+
+
+```
+
+this parses through all the words and creates a new column in the data frame listing each word as either logical(will keep the original logical word) or nonlogical 
+
+```{r}
+Spanish_tokens$logical_word <- "nonlogical"
+
+
+for (x in logical_words){
+  Spanish_tokens$logical_word[Spanish_tokens$gloss==x] <- x
+}
+
+```
+
+
+```{r}
+table(all_Spanish_utterances$no_type, useNA = "always")
+table(all_Spanish_utterances$no_subtype, useNA = "always")
+table(all_Spanish_utterances$type, useNA = "ifany")
+```
+
+
+```{r}
+table(all_Spanish_utterances$no_type, useNA = "always")
+#find out what happened to the sentential aspect of the code?
+```
+
+```{r}
+
+"logical_word" %in% names(Spanish_tokens)
+```
+This piece of code help gain an idea how the data and distribution for the logical words look like
+  
+```{r}
+```
+
+
+
+```{r}
+
+# Count logical words for verification
+  Spanish_tokens %>% group_by(language)
+logical_summary <- Spanish_tokens %>%
+  #group_by(logic_category) %>%
+  summarize(token_count = n(), .groups = "drop")
+  write_csv(Spanish_tokens, "processed_data/Spanish_tokens.csv")
+
+
+```
+
+
+
+## Coding Age
+
+Here we bin the age data per month.
+
+```{r age}
+Spanish_tokens$age <- Spanish_tokens$target_child_age %>% floor()
+```
+
+## this is where the token count starts
+
+```{r token_count_total}
+# Total number of Spanish tokens
+total_number_of_tokens <- nrow(Spanish_tokens)
+
+total_number_of_tokens
+
+
+```
+
+this plots the distribution of each plot of the spanish tokens in the filtered data
+
+```{r plot_token_distribution}
+ggplot(tokens_by_age, aes(x = age, y = token_count, color = speaker)) +
+  geom_line() +
+  labs(
+    x = "Age (months)",
+    y = "Token count",
+    title = "Distribution of Spanish Tokens Across Age"
+  ) +
+  theme_minimal()
+```
+## Grouping Utterance Types
+
+##Grouping utterances as declarative, imperative, interrogative, and other.
+
+```{r utterance_types}
+# Prepare the utterance_type categories for this study based on the utterance_types in childes-db
+## Categories: declarative, impertaive, interrogative, and other
+Spanish_tokens$utterance_type <-
+  recode(Spanish_tokens$utterance_type, 
+         question = "interrogative",
+         `broken for coding`="other",
+          `imperative_emphatic` = "imperative",
+         interruption = "other",
+         `interruption question` = "interrogative",
+         `missing CA terminator` = "other",
+         `no break TCU continuation` = "other",
+         `question exclamation` = "interrogative",
+         `quotation next line` = "other",
+         `quotation precedes` = "other",
+         `self interruption` = "other",
+         `self interruption question` = "interrogative",
+         `trail off` = "other",
+         `trail off question` = "interrogative"
+         )
+```

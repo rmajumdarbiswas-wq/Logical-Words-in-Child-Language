@@ -1,0 +1,230 @@
+---
+title: "Extracting Function Words of Interest from Childes"
+author: "Masoud Jasbi"
+date: "`r Sys.Date()`"
+output: pdf_document
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(childesr) # package for getting child language data
+library(tidyverse) # package for data wrangling
+library(feather) # package to store large files memory-efficiently
+library(ggplot2)  # package for plotting
+install.packages("knitr")
+
+```
+
+# Loading Data from Childes-DB
+
+We use the package `r childesr` to access the data in the CHILDES database. The code below downloads and stores all utterances by children and parents:
+
+```{r ChildesDBimports}
+#Getting data from 529 children in 22 corpora...
+all_Spanish_tokens <- get_tokens(collection = c("Spanish"), 
+                          role = c("target_child","Mother", "Father"),
+                          token = "*")
+```
+
+We save the downloaded data as an RDS file for future use:
+
+```{r}
+write_csv(all_Spanish_tokens, "processed_data/all_Spanish_tokens.csv")
+
+```
+
+# Token Processing
+
+## Exclusions
+
+The following script cleans up the data to make tokens lower case and exclude tokens above 72 months of the child's age. All exclusions are stored in a file called exclusions.csv
+
+```{r exclusionsTokens}
+# we should make sure all words are in lower case:
+all_Spanish_tokens$gloss <- all_Spanish_tokens$gloss %>% tolower()
+
+# count the tokens before exclusions
+n_tokens_before_exclusions <- nrow(all_Spanish_tokens)
+
+# number of children before exclusions
+n_chi_before_exclusions <-
+  all_Spanish_tokens$target_child_id %>% unique() %>% length()
+
+# removing rows for which age information for the child does not exist
+Spanish_tokens <- 
+  all_Spanish_tokens %>% drop_na(target_child_age)
+
+# count the tokens after removing NA tokens
+n_tokens_ageNAs_removed <- nrow(Spanish_tokens)
+
+# number of children after excluding NAs
+n_chi_ageNAs_removed <-
+  Spanish_tokens$target_child_id %>% unique() %>% length()
+
+#Take out data for the age range above 6 years
+Spanish_tokens <-
+  Spanish_tokens %>%
+  filter(target_child_age < 72)
+
+# count the tokens after excluding the below 1 and older than 6 age range
+n_tokens_ageOver72mo_removed <- nrow(Spanish_tokens)
+
+# number of children left after exclusions
+n_chi_ageOver72mo_removed <-
+  Spanish_tokens$target_child_id %>% unique() %>% length()
+
+# record the dataframe of exclusions
+exclusions <-
+  data.frame (
+    n_tokens_before_exclusions = n_tokens_before_exclusions,
+    n_after_ageNAs = n_tokens_ageNAs_removed,
+    n_after_age72mo = n_tokens_ageOver72mo_removed,
+    missing_age = n_tokens_before_exclusions - n_tokens_ageNAs_removed,
+    Over72mo = n_tokens_ageNAs_removed - n_tokens_ageOver72mo_removed,
+    n_chi_total = n_chi_before_exclusions,
+    n_chi_ageNAs = n_chi_ageNAs_removed,
+    n_chi_age72over = n_chi_ageOver72mo_removed)
+```
+
+```{r savingData}
+# save the exclusion data in a file as well as the final data
+write_csv(Spanish_tokens, "processed_data/Spanish_tokens.csv")
+#write_csv(exclusions, "../raw_data/processed_data.csv")
+#write_csv(exclusions, "../raw_data/exclusions_summary.csv")
+#write_csv(Spanish_tokens, "../raw_data/Spanish_tokens_excluded.csv")
+```
+
+## Coding Speaker Roles
+
+Here we group mothers and fathers together as "parents".
+
+```{r}
+Spanish_tokens <- read_csv("processed_data/Spanish_tokens.csv")
+```
+```{r}
+class(Spanish_tokens)
+```
+```{r}
+# Collapse mothers and fathers into parents
+Spanish_tokens$speaker <- "parent"
+Spanish_tokens$speaker[Spanish_tokens$speaker_role=="target_child"] <- "child"
+```
+
+## Coding Logical Words
+
+Create a list of logical words in Spanish that we are interested in studying:
+
+```{r}
+# Define logical words of interest based on study design
+logical_words <- c(
+  "y",        # coordination (and)
+  "o",        # disjunction (or)
+  "u",        # phonological variant of "o"
+  "no",       # negation
+  "nunca",    # negation
+  "nadie",    # negation
+  "nada",     # negation
+  "ningún",   # negation
+  "ningun",   # accentless variant (common in corpora)
+  "si",       # conditional (if)
+  "sí"        # possible accented form
+)
+```
+
+We create a new column called "logical_words" that codes whether the token is the specific logical word we are interseted in or not.
+
+```{r}
+Spanish_tokens <- read_csv("processed_data/Spanish_tokens.csv")
+
+# Add logical column
+Spanish_tokens <- Spanish_tokens %>%
+  mutate(logical = gloss %in% logical_words)
+
+# Verify it
+head(Spanish_tokens$logical)
+
+# Save the updated dataframe
+write_csv(Spanish_tokens, "processed_data/Spanish_tokens.csv")
+
+
+```
+
+```{r}
+Spanish_tokens$logical_word <- "nonlogical"
+
+for (x in logical_words){
+  Spanish_tokens$logical_word[Spanish_tokens$gloss==x] <- x
+}
+```
+
+
+  
+```{r}
+
+# Count logical words for verification
+  Spanish_tokens %>% group_by(language)
+logical_summary <- Spanish_tokens %>%
+  #group_by(logic_category) %>%
+  summarize(token_count = n(), .groups = "drop")
+  write_csv(Spanish_tokens, "processed_data/Spanish_tokens.csv")
+
+
+```
+
+```{r}
+colnames(Spanish_tokens)
+```
+
+## Coding Age
+
+Here we bin the age data per month.
+
+```{r age}
+Spanish_tokens$age <- Spanish_tokens$target_child_age %>% floor()
+```
+
+## this is where the token count starts
+
+```{r token_count_total}
+# Total number of Spanish tokens
+total_number_of_tokens <- nrow(Spanish_tokens)
+
+total_number_of_tokens
+```
+
+```{r plot_token_distribution}
+ggplot(tokens_by_age, aes(x = age, y = token_count, color = speaker)) +
+  geom_line() +
+  labs(
+    x = "Age (months)",
+    y = "Token count",
+    title = "Distribution of Spanish Tokens Across Age"
+  ) +
+  theme_minimal()
+```
+## Grouping Utterance Types
+
+##Grouping utterances as declarative, imperative, interrogative, and other.
+
+```{r utterance_types}
+# Prepare the utterance_type categories for this study based on the utterance_types in childes-db
+## Categories: declarative, impertaive, interrogative, and other
+Spanish_tokens$utterance_type <-
+  recode(Spanish_tokens$utterance_type, 
+         question = "interrogative",
+         `broken for coding`="other",
+          `imperative_emphatic` = "imperative",
+         interruption = "other",
+         `interruption question` = "interrogative",
+         `missing CA terminator` = "other",
+         `no break TCU continuation` = "other",
+         `question exclamation` = "interrogative",
+         `quotation next line` = "other",
+         `quotation precedes` = "other",
+         `self interruption` = "other",
+         `self interruption question` = "interrogative",
+         `trail off` = "other",
+         `trail off question` = "interrogative"
+         )
+```

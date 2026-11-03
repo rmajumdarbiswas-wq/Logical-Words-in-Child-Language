@@ -1,0 +1,150 @@
+---
+  title: "Extracting Function Words of Interest from Childes"
+author: "Masoud Jasbi"
+date: "`r Sys.Date()`"
+output: pdf_document
+
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(childesr) # package for getting child language data
+library(tidyverse) # package for data wrangling
+library(feather) # package to store large files memory-efficiently
+library(ggplot2)  # package for plotting
+install.packages("knitr")
+
+```
+
+# Loading Data from Childes-DB
+
+We use the package `r childesr` to access the data in the CHILDES database. The code below downloads and stores all utterances by children and parents:
+  
+```{r ChildesDBimports}
+#Getting data from 529 children in 22 corpora...
+all_German_tokens <- get_tokens(collection = c("German"), 
+                                 role = c("target_child","Mother", "Father"),
+                                 token = "*")
+```
+
+```{r}
+write_csv(all_German_tokens, "C:/Spanish Folder/German/all_German_tokens.csv")
+
+
+```
+
+
+
+
+# Token Processing
+
+## Exclusions
+
+The following script cleans up the data to make tokens lower case and exclude tokens above 72 months of the child's age. All exclusions are stored in a file called exclusions.csv
+
+```{r exclusionsTokens}
+# we should make sure all words are in lower case:
+all_German_tokens$gloss <- all_German_tokens$gloss %>% tolower()
+
+# count the tokens before exclusions
+n_tokens_before_exclusions <- nrow(all_German_tokens)
+
+# number of children before exclusions
+n_chi_before_exclusions <-
+  all_German_tokens$target_child_id %>% unique() %>% length()
+
+# removing rows for which age information for the child does not exist
+German_tokens <- 
+  all_German_tokens %>% drop_na(target_child_age)
+
+# count the tokens after removing NA tokens
+n_tokens_ageNAs_removed <- nrow(German_tokens)
+
+# number of children after excluding NAs
+n_chi_ageNAs_removed <-
+  German_tokens$target_child_id %>% unique() %>% length()
+
+#Take out data for the age range above 6 years
+German_tokens <-
+  German_tokens %>%
+  filter(target_child_age < 72)
+
+# count the tokens after excluding the below 1 and older than 6 age range
+n_tokens_ageOver72mo_removed <- nrow(German_tokens)
+
+# number of children left after exclusions
+n_chi_ageOver72mo_removed <-
+  German_tokens$target_child_id %>% unique() %>% length()
+
+# record the dataframe of exclusions
+exclusions <-
+  data.frame (
+    n_tokens_before_exclusions = n_tokens_before_exclusions,
+    n_after_ageNAs = n_tokens_ageNAs_removed,
+    n_after_age72mo = n_tokens_ageOver72mo_removed,
+    missing_age = n_tokens_before_exclusions - n_tokens_ageNAs_removed,
+    Over72mo = n_tokens_ageNAs_removed - n_tokens_ageOver72mo_removed,
+    n_chi_total = n_chi_before_exclusions,
+    n_chi_ageNAs = n_chi_ageNAs_removed,
+    n_chi_age72over = n_chi_ageOver72mo_removed)
+```
+
+```{r}
+write_csv(German_tokens, "C:/Spanish Folder/processed_data/German_tokens.csv")
+```
+
+```{r}
+German_tokens$speaker_role <- ifelse(German_tokens$speaker_role %in% c("Mother", "Father"), "Parent", German_tokens$speaker_role)
+```
+
+```{r}
+nrow(all_German_tokens)
+nrow(German_tokens)
+
+exclusions %>%
+  select(missing_age, Over72mo) %>%
+  print()
+
+length(unique(German_tokens$target_child_id))
+```
+
+
+```{r}
+
+  # Spanish
+  n_distinct(all_German_tokens$target_child_id)   # children before exclusion
+  n_distinct(German_tokens$target_child_id)       # children after exclusion
+  nrow(all_German_tokens)                         # tokens before exclusion
+  nrow(German_tokens)                             # tokens after exclusion
+```
+
+```{r}
+German_tokens
+unique(German_tokens$speaker_role) 
+```
+
+```{r}
+
+# Filter for "nein"
+nein_tokens <- German_tokens %>%
+  filter(gloss == "nein")
+
+# Total count
+nrow(nein_tokens)
+
+# Count by speaker role
+nein_tokens %>%
+  count(speaker_role, sort = TRUE)
+
+# Count by child age (in months, binned)
+nein_tokens %>%
+  mutate(age_bin = floor(target_child_age)) %>%
+  count(age_bin) %>%
+  arrange(age_bin)
+
+# Count by child
+nein_tokens %>%
+  count(target_child_id, sort = TRUE)
+```
+
+

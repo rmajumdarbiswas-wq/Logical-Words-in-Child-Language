@@ -1,0 +1,1067 @@
+---
+title: "Spanish Plots And Curves"
+output: html_document
+date: "2026-04-12"
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(feather)
+library(brms)
+library(ggeffects)
+library(ggrepel)
+library(feather) 
+library(arrow)
+```
+
+this ensures that the data points from the spanish data frame is easily accessible in a file 
+```{r}
+dir.create("../modeling", showWarnings = FALSE, recursive = TRUE)
+dir.create(".../processed_data", showWarnings = FALSE, recursive = TRUE)
+```
+
+this allows for the code to continue processing even if one code has a chunch that is broken
+```{r}
+knitr::opts_chunk$set(error = TRUE)
+```
+# Load Data
+the code below loads up data and has the age exclusions and excludes data that is not valuable 
+
+```{r processedSpanishTokens}
+Spanish_tokens <- read_csv("processed_data/Spanish_tokens.csv")
+
+```
+this takes the processed data and creates the sum of frequency per speaker role at each age, and then divide and then create parts per thousand, leading to the cumalative sums 
+take a0 for each zero in each function word for each age bin between the ages of 0 and 10
+add in the rows from 0 to 10 for the function word real freq so that it shows that the data here is 0 
+
+#ask if this code is necessary
+#```{r}
+#logical_relfreq <-
+#  Spanish_tokens %>%
+#  group_by(logical, target_child_age, speaker_role) %>%
+#  summarise(freq=n()) %>%
+#  group_by(speaker_role,Target_Child_name) %>%
+#  mutate(total=sum(freq), relfreq=freq/sum(freq), pct=relfreq*100) %>%
+# group_by(logical, speaker_role) %>%
+# arrange(target_child_age) %>%
+# mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total), cumulative_pct=cumulative_relfreq*100)
+#saveRDS(logical_relfreq, "logical_relfreq.RDS")
+#```
+
+
+
+#this chunk of code filters through all the nos and separates them into nos with discourse and nos with 
+#sentential, so that they eventually get their own graph
+```{r split_no}
+nos_labels <- read_csv("processed_data/all_nos_labeled.csv",
+                       col_select = c(token_id, label)) %>%
+  transmute(
+    id = as.numeric(token_id),
+    no_type = case_when(
+      label == "D" ~ "no_discourse",
+      label == "S" ~ "no_sentential",
+      TRUE         ~ "no_unclassified"
+    )
+  )
+
+Spanish_tokens <- Spanish_tokens %>%
+  select(-any_of("no_type")) %>%
+  left_join(nos_labels, by = "id") %>%
+  mutate(logical_word = case_when(
+    !is.na(no_type)      ~ no_type,
+    logical_word == "no" ~ "no_unclassified",
+    TRUE                 ~ logical_word
+  ))
+Spanish_tokens %>% filter(str_starts(logical_word, "no_")) %>% count(logical_word)
+```
+
+
+this chunk of code creates another data frame that calculates the cumalative relative frequency of each of the words in the logical words and sorts them by speaker age
+# stan is not comiling so forcing data may be a problem...
+these function words include: 
+```{r}
+functionword_relfreq <-
+  
+  child_data <- Spanish_tokens %>%
+  filter(speaker == "child") %>%
+  mutate(target_child_age = floor(target_child_age)) %>%  # only change
+  group_by(logical_word, target_child_age, speaker) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  mutate(freq = as.numeric(freq)) %>%
+  tidyr::complete(
+    logical_word,
+    speaker,
+    target_child_age = 0:10,
+    
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(target_child_age <= 10, 0, freq))
+
+
+parent_data <- Spanish_tokens %>%
+  filter(speaker != "child") %>%
+  mutate(target_child_age = floor(target_child_age)) %>%  # only change
+  group_by(logical_word, target_child_age, speaker) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  mutate(freq = as.numeric(freq))
+
+functionword_relfreq <- bind_rows(child_data, parent_data) %>%
+  group_by(speaker, target_child_age) %>%
+  mutate(
+    total = sum(freq),
+    relfreq = ifelse(total == 0, 0, freq / total),
+    ppt = relfreq * 1000
+  ) %>%
+  group_by(logical_word, speaker) %>%
+  arrange(target_child_age) %>%
+  mutate(
+    cum_freq = cumsum(freq),
+    cum_total = cumsum(total),
+    cumulative_relfreq = ifelse(cum_total == 0, 1e-6, cum_freq / cum_total),
+    cumulative_ppt = cumulative_relfreq * 1000
+  )
+
+  saveRDS(functionword_relfreq, "functionword_relfreq.RDS")
+
+```
+
+# new separated -- this shows the two separate sentential versus discourse plots --> this is the new growth fitting curve that separates the sentential versus discourse no 
+```{r Neg_No_Growth_Model_split, include=FALSE}
+fit_no <- function(which_no, fit_file) {
+  brm(
+    bf(
+      cumulative_ppt ~ upperAsymptote * exp(
+        -exp(((growthRate * exp(1)) / upperAsymptote) * (lag - target_child_age) + 1)
+      ),
+      upperAsymptote ~ 1,
+      growthRate ~ 1,
+      lag ~ 1,
+      nl = TRUE
+    ),
+    data = filter(functionword_relfreq,
+                  logical_word == which_no,
+                  speaker == "child"),
+    prior = c(
+      prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+      prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+      prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+    ),
+    iter = 10000,
+    file = fit_file
+  )
+}
+
+neg_no_sentential_model <- fit_no("no_sentential", "spanish_neg_no_sentential_fit")
+neg_no_discourse_model  <- fit_no("no_discourse",  "spanish_neg_no_discourse_fit")
+```
+
+#new labels 
+#This chunk pulls the estimated onset age (“lag”) out of each fitted growth model, puts the two estimates in one table, and saves the table
+
+```{r age_of_production_split}
+get_lag <- function(model, label) {
+  summ <- fixef(model)
+  data.frame(
+    logical_word = label,
+    Estimate  = round(summ["lag_Intercept", "Estimate"], 1),
+    Est.Error = round(summ["lag_Intercept", "Est.Error"], 1),
+    Q2.5      = round(summ["lag_Intercept", "Q2.5"], 1),
+    Q97.5     = round(summ["lag_Intercept", "Q97.5"], 1)
+  )
+}
+
+age_of_production_no_split <- bind_rows(
+  get_lag(neg_no_sentential_model, "no_sentential"),
+  get_lag(neg_no_discourse_model,  "no_discourse")
+)
+
+saveRDS(age_of_production_no_split, "../processed_data/age_of_production_no_split.RDS")
+```
+
+#new fitted values 
+#This chunk takes the child rows for each category (sentential, discourse), adds the growth model’s fitted values as a predictions column next to the observed cumulative_ppt, and saves each table as an RDS file. The growth plots then draw the observed points and the fitted line from those tables.
+```{r neg_no_predictions_split}
+neg_sentential_childdata <- filter(functionword_relfreq,
+                                   logical_word == "no_sentential", speaker == "child")
+neg_sentential_childdata$predictions <-
+  as.data.frame(fitted(neg_no_sentential_model))[, "Estimate"]
+
+neg_discourse_childdata <- filter(functionword_relfreq,
+                                  logical_word == "no_discourse", speaker == "child")
+neg_discourse_childdata$predictions <-
+  as.data.frame(fitted(neg_no_discourse_model))[, "Estimate"]
+
+saveRDS(neg_sentential_childdata, "../processed_data/neg_no_sentential_childdata.RDS")
+saveRDS(neg_discourse_childdata,  "../processed_data/neg_no_discourse_childdata.RDS")
+```
+
+#sentential growth plot
+#growth curve for sentential no 
+
+```{r growth_no_sentential}
+no_sentential_plot <-
+  ggplot(neg_sentential_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Sentential no", x="Child Age (Month)", y="Parts per Thousand") +
+  theme(legend.position = "none") +
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+print(no_sentential_plot)
+```
+
+#discourse growth plot
+#growth curve for discourse no
+```{r growth_no_discourse}
+no_discourse_plot <-
+  ggplot(neg_discourse_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) +
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) +
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Discourse no", x="Child Age (Month)", y="Parts per Thousand") +
+  theme(legend.position = "none") +
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+print(no_discourse_plot)
+```
+
+This plot of code creates graphs for the function word no for children vs children, where the first 10 months are zeroed out 
+This code plots developmental trajectories for the Spanish negation marker **no** across child and caregiver speech.
+
+To ground the model, ages 1–10 months are assigned cumulative frequencies of zero. Maternal and paternal speech are also merged into a single **Parent** speaker category.
+
+The word **no** functions as a negation marker in Spanish.
+
+Example:
+
+> *No quiero leche.*  
+> “I do not want milk.”
+
+```{r negation_no}
+functionword_relfreq %>%
+  filter(logical_word %in% c("no_sentential", "no_discourse")) %>%
+  #filter(target_child_age > 10) %>%
+  # mutate(speaker_role = ifelse(speaker_role %in% c("Mother", "Father"),
+  #                              "Parent",
+  #                              speaker_role)) %>%
+
+  ggplot(aes(target_child_age, cumulative_ppt, color = logical_word)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() + 
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+
+
+```
+# figure out how to collapse parent and child 
+#plot of the negation of no sentential 
+```{r negation_no_sentential}
+functionword_relfreq %>%
+  filter(logical_word == "no_sentential") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  ggtitle("Sentential no") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+#plot of negation no discourse
+
+```{r negation_no_discourse}
+functionword_relfreq %>%
+  filter(logical_word == "no_discourse") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  ggtitle("Discourse no") +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+
+fitting the growth curve to the data for the function word no using bayesian function 
+# there may be errors in the type of modeling being used 
+
+# ```{r}
+# 
+# Spanish_tokens %>%
+#   filter(between(target_child_age, 1, 10)) %>%
+#   print(between(target_child_age, 1, 10)
+# ```
+
+
+
+# this is all the code for when sentential and discourse no was still combined 
+
+```{r Neg_No_Growth_Model, include=FALSE}
+neg_no_lagModel <- brm(
+ 
+  bf(
+    cumulative_ppt ~ upperAsymptote * exp(
+      -exp(((growthRate * exp(1)) / upperAsymptote) * (lag - target_child_age) + 1)
+    ),
+    upperAsymptote ~ 1,
+    growthRate ~ 1,
+    lag ~ 1,
+    nl = TRUE
+  ),
+  
+  data = filter(
+    functionword_relfreq,
+    logical_word == "no",
+    speaker == "child"
+    
+  ),
+  
+  #this is often what you have to change
+ 
+  prior = c(
+    prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+  ),
+
+  iter = 10000,
+  file = "spanish_neg_no_lag_model_fit8"
+)
+
+
+```
+
+
+this is calculating the age of production for the curve 
+this also helps set the age boundaries for the bayesian model
+
+```{r age_of_production_no}
+
+
+summ <- fixef(neg_no_lagModel)
+
+age_of_production_no <- data.frame(
+  logical_word = "no",
+  Estimate  = round(summ["lag_Intercept", "Estimate"], 1),
+  Est.Error = round(summ["lag_Intercept", "Est.Error"], 1),
+  Q2.5      = round(summ["lag_Intercept", "Q2.5"], 1),
+  Q97.5     = round(summ["lag_Intercept", "Q97.5"], 1)
+)
+
+saveRDS(age_of_production_no, "../processed_data/age_of_production_no.RDS")
+
+```
+
+
+fits it into the model 
+
+```{r neg_no_predictions}
+neg_no_predictions <- as.data.frame(fitted(neg_no_lagModel))
+
+neg_no_childdata <- filter(functionword_relfreq, logical_word=="no", speaker=="child")
+neg_no_childdata$predictions <- neg_no_predictions[, "Estimate"]
+
+saveRDS(neg_no_childdata, "../processed_data/neg_no_childdata.RDS")
+```
+
+this code plots the graph of the cumalative relative frequency of child age per month versus parts per thousand e 
+```{r neg_no_prediction_Plot} 
+no_plot <-
+  ggplot(neg_no_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="No", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(linewidth = 20, hjust = 0.5),
+    axis.title.x = element_text(linewidth= 16),
+    axis.title.y = element_text(linewidth = 16),
+    axis.text.x = element_text(linewidth= 14),
+    axis.text.y = element_text(linewidth= 14),
+    legend.title = element_text(linewidth = 14),
+    legend.text  = element_text(linewidth = 12)
+  )
+
+print(no_plot)
+```
+
+
+# fit all the models 
+# get the data frame and put in column for how early each function word is produced 
+
+
+##### Si (Done)
+
+This code plots developmental trajectories for the Spanish affirmation marker **sí** across child and caregiver speech. The first 10 months are zeroed out to ground the model. In this context, **sí** is the Spanish equivalent of “yes.”
+
+Example:
+
+> *Sí, quiero más.*  
+> “Yes, I want more.”
+
+
+```{r negation_si}
+functionword_relfreq %>%
+  filter(logical_word=="si") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+this allows us to see max amounts to set the priors 
+```{r}
+functionword_relfreq %>%
+  filter(logical_word == "si", speaker == "child") %>%
+  summarise(max_ppt = max(cumulative_ppt, na.rm = TRUE),
+            max_age = max(target_child_age, na.rm = TRUE))
+```
+
+### Bayesian Growth Curve Model
+
+This chunk fits a Bayesian Gompertz growth curve to the developmental trajectory of the Spanish affirmation marker **sí** (“yes”) in child speech.
+
+The model estimates:
+
+- **upperAsymptote**: the maximum expected frequency
+- **growthRate**: how quickly usage increases
+- **lag**: the developmental onset point where growth accelerates
+
+Priors and initial values are provided to stabilize model fitting.
+
+
+```{r yes_lagModel, include=FALSE}
+yes_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-target_child_age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, logical_word =="si", speaker == "child"),
+  
+   prior = c(
+    prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+     prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+  ),
+
+  file = "../modeling/yes_lagModel",
+
+  iter = 10000
+)
+```
+
+### Estimated Age of Production
+
+This code extracts the estimated lag parameter from the fitted model and stores it in the `age_of_production` dataframe. The lag parameter approximates the developmental onset age for **sí**.
+
+```{r age_of_production_yes}
+age_of_production <-
+  rbind(age_of_production, c("si", round(fixef(yes_lagModel)[3,],1)))
+```
+
+
+### Prediction Plot
+
+This code visualizes the observed developmental data alongside the fitted Bayesian growth curve for **sí**.
+
+- Black points represent observed child speech data
+- The blue line represents the fitted Gompertz growth curve
+
+This allows comparison between the empirical data and the model’s predicted developmental trajectory.
+
+```{r yes_predictions}
+yes_predictions <- as.data.frame(fitted(yes_lagModel))
+
+yes_childdata <- filter(functionword_relfreq, logical_word == "si", speaker=="child")
+yes_childdata$predictions <- yes_predictions[, "Estimate"]
+
+saveRDS(yes_childdata, "../processed_data/yes_childdata.RDS")
+```
+
+this prints out the plot for teh function word si in spanish using all the previous data initialization
+#rename as if 
+
+```{r neg_no_prediction_Plot} 
+yes_plot <-
+  ggplot(yes_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Yes", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+print(yes_plot)
+```
+
+
+```{r}
+child_data %>% filter(logical_word == "si") %>% print(n = 30)
+```
+
+# nada
+Nada will not be included bc it has data sparsity issues 
+# again do the sparsity issue as shown above 
+```{r negation_no}
+functionword_relfreq %>%
+  filter(logical_word=="nada") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+```{r}
+functionword_relfreq %>%
+  filter(logical_word == "nada", speaker == "child") %>%
+  summarise(max_ppt = max(cumulative_ppt, na.rm = TRUE),
+            max_age = max(target_child_age, na.rm = TRUE))
+```
+
+fitting the growth curve to the data for the function word nada using bayesian function 
+
+
+```{r Neg_No_Growth_Model, include=FALSE}
+neg_nada_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-target_child_age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, logical_word =="nada", speaker=="child"),
+
+    prior = c(
+    prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+  ),
+
+  
+  file = "../modeling/neg_nada_lagModel1", # this may need to be changed
+  iter = 10000)
+
+
+```
+
+this shows the age of production for nada
+```{r age_of_production_nada}
+age_of_production <-
+  rbind(age_of_production, c("nada", round(fixef(neg_nada_lagModel)[3,],1)))
+```
+
+```{r age_of_production_nada}
+
+
+summ <- fixef(neg_nada_lagModel)
+
+age_of_production_nada <- data.frame(
+  logical_word = "nada",
+  Estimate  = round(summ["lag_Intercept", "Estimate"], 1),
+  Est.Error = round(summ["lag_Intercept", "Est.Error"], 1),
+  Q2.5      = round(summ["lag_Intercept", "Q2.5"], 1),
+  Q97.5     = round(summ["lag_Intercept", "Q97.5"], 1)
+)
+
+saveRDS(age_of_production_nada, "../processed_data/age_of_production_nada.RDS")
+
+```
+
+```{r neg_no_predictions}
+nada_predictions <- as.data.frame(fitted(neg_nada_lagModel))
+
+nada_childdata <- filter(functionword_relfreq, logical_word=="nada", speaker=="child")
+nada_childdata$predictions <- nada_predictions[, "Estimate"]
+
+saveRDS(nada_childdata, "../processed_data/nada_childdata.RDS")
+```
+
+```{r neg_nada_prediction_Plot} 
+nada_plot <-
+  ggplot(nada_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Nada", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+plot(nada_plot)
+```
+
+#y
+
+
+this demonstrates the cumalative parts per thousand for and 
+```{r conjunction_y}
+functionword_relfreq %>%
+  filter(logical_word=="y") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+```{r}
+functionword_relfreq %>%
+  filter(logical_word == "y", speaker == "child") %>%
+  summarise(max_ppt = max(cumulative_ppt, na.rm = TRUE),
+            max_age = max(target_child_age, na.rm = TRUE))
+```
+
+fitting the growth curve to the data for the function word y using bayesian function 
+
+
+```{r Conj_Y_Growth_Model, include=FALSE}
+y_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-target_child_age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, logical_word =="y", speaker=="child"),
+  
+
+  prior = c(
+    prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+
+  
+  control = list(adapt_delta = 0.99),
+iter = 4000,
+
+file = "../modeling/y_lagModel", # this may need to be changed
+  )
+```
+
+this is calculating the age of production for the curve 
+this also helps set the age boundaries for the bayesian model
+
+```{r age_of_production_y}
+age_of_production <-
+  rbind(age_of_production, c("y", round(fixef(y_lagModel)[3,],1)))
+```
+
+this intializes the prediction plot 
+```{r y_predictions}
+y_predictions <- as.data.frame(fitted(y_lagModel))
+y_childdata <- y_lagModel$data  
+#y_childdata <- filter(functionword_relfreq, logical_word == "y", speaker=="child")
+y_childdata$predictions <- y_predictions[, "Estimate"]
+
+saveRDS(y_childdata, "../processed_data/y_childdata.RDS")
+```
+
+This generated the plot for y in spanish for the prediction plot 
+```{r y_prediction_Plot} 
+y_plot <-
+  ggplot(y_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Y", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+## R Markdown
+
+plot(y_plot)
+```
+
+
+
+
+# 'o'
+
+This demonstrates the cumalative parts per thousand over the different age bins for the language acquistion for the function word 'o'
+
+# look at the context of or in the childes for spanish to see how its being mapped 
+```{r disjunction_o}
+functionword_relfreq %>%
+  filter(logical_word=="o") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+
+this allows us to see max amounts to set the priors 
+```{r}
+functionword_relfreq %>%
+  filter(logical_word == "o", speaker == "child") %>%
+  summarise(max_ppt = max(cumulative_ppt, na.rm = TRUE),
+            max_age = max(target_child_age, na.rm = TRUE))
+```
+
+### Bayesian Growth Curve Model
+
+This chunk fits a Bayesian Gompertz growth curve to the developmental trajectory of the Spanish affirmation marker **sí** (“yes”) in child speech.
+
+The model estimates:
+
+- **upperAsymptote**: the maximum expected frequency
+- **growthRate**: how quickly usage increases
+- **lag**: the developmental onset point where growth accelerates
+
+Priors and initial values are provided to stabilize model fitting.
+
+
+```{r yes_lagModel, include=FALSE}
+o_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-target_child_age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, logical_word =="si", speaker == "child"),
+  
+
+    prior = c(
+    prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  
+  file = "../modeling/o_lagModel",
+  iter = 10000
+)
+```
+
+### Estimated Age of Production
+
+This code extracts the estimated lag parameter from the fitted model and stores it in the `age_of_production` dataframe. The lag parameter approximates the developmental onset age for **sí**.
+
+```{r age_of_production_yes}
+age_of_production <-
+  rbind(age_of_production, c("o", round(fixef(yes_lagModel)[3,],1)))
+```
+
+
+### Prediction Plot
+
+This code visualizes the observed developmental data alongside the fitted Bayesian growth curve for **sí**.
+
+- Black points represent observed child speech data
+- The blue line represents the fitted Gompertz growth curve
+
+This allows comparison between the empirical data and the model’s predicted developmental trajectory.
+
+```{r o_predictions}
+o_predictions <- as.data.frame(fitted(o_lagModel))
+
+o_childdata <- filter(functionword_relfreq, logical_word == "o", speaker=="child")
+o_childdata$predictions <- o_predictions[, "Estimate"]
+
+saveRDS(o_childdata, "../processed_data/o_childdata.RDS")
+```
+
+this prints out the plot for teh function word si in spanish using all the previous data initialization
+
+```{r neg_no_prediction_Plot} 
+yes_plot <-
+  ggplot(yes_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Yes", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+print(yes_plot)
+```
+
+
+# u
+this is the graph for the phonological variant u 
+this can be collapsed with the logical word 'o' as 'u' is just a phonological variant of'o'
+```{r negation_u}
+functionword_relfreq %>%
+  filter(logical_word=="u") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+# nunca
+"Nunca" probably DOES NOT HAVE ENOUGH DATA
+```{r negation_no}
+functionword_relfreq %>%
+  filter(logical_word=="nunca") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+### Bayesian Growth Curve Model
+
+This chunk fits a Bayesian Gompertz growth curve to the developmental trajectory of the Spanish affirmation marker **sí** (“yes”) in child speech.
+
+The model estimates:
+
+- **upperAsymptote**: the maximum expected frequency
+- **growthRate**: how quickly usage increases
+- **lag**: the developmental onset point where growth accelerates
+
+Priors and initial values are provided to stabilize model fitting.
+
+
+```{r nunca_lagModel, include=FALSE}
+nunca_lagModel <- brm(
+  bf(cumulative_ppt  ~ upperAsymptote * exp(-exp(((growthRate*exp(1))/upperAsymptote)*(lag-target_child_age)+1)),
+     upperAsymptote ~ 1,
+     growthRate ~ 1,
+     lag ~ 1,
+     nl = TRUE),
+  data = filter(functionword_relfreq, logical_word =="nunca", speaker == "child"),
+  
+
+    prior = c(
+    prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+  
+  file = "../modeling/nunca_lagModel1",
+  iter = 10000
+)
+```
+
+### Estimated Age of Production
+
+This code extracts the estimated lag parameter from the fitted model and stores it in the `age_of_production` dataframe. The lag parameter approximates the developmental onset age for **sí**.
+
+```{r age_of_production_nunca}
+age_of_production <-
+  rbind(age_of_production, c("nunca", round(fixef(nunca_lagModel)[3,],1)))
+```
+
+
+### Prediction Plot
+
+This code visualizes the observed developmental data alongside the fitted Bayesian growth curve for **sí**.
+
+- Black points represent observed child speech data
+- The blue line represents the fitted Gompertz growth curve
+
+This allows comparison between the empirical data and the model’s predicted developmental trajectory.
+
+```{r nunca_predictions}
+nunca_predictions <- as.data.frame(fitted(nunca_lagModel))
+
+#nunca_childdata$predictions <- fitted(nunca_lagModel)
+
+
+
+nunca_childdata <- filter(functionword_relfreq, logical_word == "nunca", speaker=="child")
+nunca_childdata$predictions <- nunca_predictions[, "Estimate"]
+
+saveRDS(nunca_childdata, "../processed_data/nunca_childdata.RDS")
+```
+
+this prints out the plot for teh function word si in spanish using all the previous data initialization
+
+```{r nunca_prediction_Plot} 
+nunca_plot <-
+  ggplot(nunca_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Nunca", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(size = 20, hjust = 0.5),
+    axis.title.x = element_text(size = 16),
+    axis.title.y = element_text(size = 16),
+    axis.text.x = element_text(size = 14),
+    axis.text.y = element_text(size = 14),
+    legend.title = element_text(size = 14),
+    legend.text  = element_text(size = 12)
+  )
+print(nunca_plot)
+```
+
+
+This is for plot of the word function word yes, also known as si' in spanish
+
+# si
+
+```{r negation_no}
+functionword_relfreq %>%
+  filter(logical_word =="si") %>%
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker) +
+  theme_bw() +
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+```
+
+## Including Plots 
+
+
+
+```{r}
+age_of_production_no <- readRDS("../processed_data/age_of_production_no.RDS")
+
+functionword_onsetage_plot <- age_of_production_no %>%
+  mutate(logical_word = fct_reorder(logical_word, Estimate)) %>%
+  ggplot(aes(x = Estimate, y = logical_word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 12),
+        text = element_text(size = 12)) +
+  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
+  labs(x = "Age (Months)", y = "")
+
+print(functionword_onsetage_plot)
+
+```
+
+```{r}
+age_of_production_nada <- readRDS("../processed_data/age_of_production_nada.RDS")
+
+functionword_onsetage_plot_nada <- age_of_production_nada %>%
+  mutate(logical_word = fct_reorder(logical_word, Estimate)) %>%
+  ggplot(aes(x = Estimate, y = logical_word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 12),
+        text = element_text(size = 12)) +
+  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
+  labs(x = "Age (Months)", y = "")
+
+print(functionword_onsetage_plot_nada)
+
+```
+
+```{r}
+
+
+no   <- readRDS("../processed_data/age_of_production_no.RDS")
+nada <- readRDS("../processed_data/age_of_production_nada.RDS")
+
+functionword_onsetage_plot_combinedFinal <- bind_rows(no, nada) %>%
+  mutate(logical_word = fct_reorder(logical_word, Estimate)) %>%
+  ggplot(aes(x = Estimate, y = logical_word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 12),
+        text = element_text(size = 12)) +
+  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
+  labs(x = "Age (Months)", y = "")
+
+print(functionword_onsetage_plot_combined)
+
+
+```
+```{r}
+spanish_negation <- map_dfr(list(
+  "../processed_data/age_of_production_no.RDS",
+  "../processed_data/age_of_production_nada.RDS"
+), readRDS)
+
+saveRDS(spanish_negation, "../processed_data/age_of_production_spanish2.RDS")
+
+
+```
+
+#this code demonstrates the sentential no age of onset
+
+```{r onset_plot_sentential}
+age_of_production_no_split %>%
+  filter(logical_word == "no_sentential") %>%
+  ggplot(aes(x = Estimate, y = logical_word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() +
+  scale_x_continuous(limits = c(0, 72), breaks = seq(0, 72, by = 6)) +
+  labs(title = "Sentential no: age of onset", x = "Age (Months)", y = "")
+```
+# this code demonstrates the discourse no age of onset 
+```{r onset_plot_discourse}
+age_of_production_no_split %>%
+  filter(logical_word == "no_discourse") %>%
+  ggplot(aes(x = Estimate, y = logical_word)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() +
+  scale_x_continuous(limits = c(0, 72), breaks = seq(0, 72, by = 6)) +
+  labs(title = "Discourse no: age of onset", x = "Age (Months)", y = "")
+```
+
+
+
+# saves the split onset files into one file 
+```{r save_onset_split}
+dir.create("../processed_data", showWarnings = FALSE, recursive = TRUE)
+
+saveRDS(filter(age_of_production_no_split, logical_word == "no_sentential"),
+        "../processed_data/age_of_production_no_sentential.RDS")
+
+saveRDS(filter(age_of_production_no_split, logical_word == "no_discourse"),
+        "../processed_data/age_of_production_no_discourse.RDS")
+
+readRDS("../processed_data/age_of_production_no_sentential.RDS")
+readRDS("../processed_data/age_of_production_no_discourse.RDS")
+```
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

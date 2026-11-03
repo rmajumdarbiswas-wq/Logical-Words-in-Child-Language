@@ -1,0 +1,545 @@
+---
+title: "German_Plots_And_Curves"
+output: html_document
+date: "2026-06-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:---
+title: "German Plots And Curves"
+output: html_document
+date: "2026-04-12"
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(feather)
+library(brms)
+library(ggeffects)
+library(ggrepel)
+library(feather) 
+library(arrow)
+```
+
+this ensures that the data points from the German data frame is easily accessible in a file 
+```{r}
+dir.create("../modeling", showWarnings = FALSE, recursive = TRUE)
+dir.create(".../processed_data", showWarnings = FALSE, recursive = TRUE)
+```
+
+this allows for the code to continue processing even if one code has a chunch that is broken
+```{r}
+knitr::opts_chunk$set(error = TRUE)
+```
+# Load Data
+the code below loads up data and has the age exclusions and excludes data that is not valuable 
+
+```{r processedGermanTokens}
+German_tokens <- read_csv("C:/Spanish Folder/processed_data/German_tokens.csv")
+
+```
+this takes the processed data and creates the sum of frequency per speaker role at each age, and then divide and then create parts per thousand, leading to the cumalative sums 
+take a0 for each zero in each function word for each age bin between the ages of 0 and 10
+add in the rows from 0 to 10 for the function word real freq so that it shows that the data here is 0 
+
+ask if this code is necessary
+
+```{r}
+logical_relfreq <-
+  German_tokens %>%
+  group_by(logical, target_child_age, speaker_role) %>%
+  summarise(freq=n()) %>%
+  group_by(speaker_role, target_child_name) %>%
+  mutate(total=sum(freq), relfreq=freq/sum(freq), pct=relfreq*100) %>%
+  group_by(logical, speaker_role) %>%
+  arrange(target_child_age) %>%
+  mutate(cum_freq = cumsum(freq), cum_total= cumsum(total), cumulative_relfreq = cumsum(freq)/cumsum(total), cumulative_pct=cumulative_relfreq*100)
+
+saveRDS(logical_relfreq, "logical_relfreq.RDS")
+```
+
+this chunk of code creates another data frame that calculates the cumalative relative frequency of each of the words in the logical words and sorts them by speaker age
+# stan is not comiling so forcing data may be a problem...
+these function words include: 
+```{r}
+functionword_relfreq <-
+  
+  child_data <- German_tokens %>%
+  filter(speaker_role == "Target_Child") %>%
+  mutate(target_child_age = floor(target_child_age)) %>%  # only change
+  group_by(gloss, target_child_age, speaker_role) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  mutate(freq = as.numeric(freq)) %>%
+  tidyr::complete(
+    gloss,
+    speaker_role,
+    target_child_age = 0:10,
+    
+    fill = list(freq = 0)
+  ) %>%
+  mutate(freq = ifelse(target_child_age <= 10, 0, freq))
+
+
+parent_data <- German_tokens %>%
+  filter(speaker_role != "Target_Child") %>%
+  mutate(target_child_age = floor(target_child_age)) %>%  # only change
+  group_by(gloss, target_child_age, speaker_role) %>%
+  summarise(freq = n(), .groups = "drop") %>%
+  mutate(freq = as.numeric(freq))
+
+functionword_relfreq <- bind_rows(child_data, parent_data) %>%
+  group_by(speaker_role, target_child_age) %>%
+  mutate(
+    total = sum(freq),
+    relfreq = ifelse(total == 0, 0, freq / total),
+    ppt = relfreq * 1000
+  ) %>%
+  group_by(gloss, speaker_role) %>%
+  arrange(target_child_age) %>%
+  mutate(
+    cum_freq = cumsum(freq),
+    cum_total = cumsum(total),
+    cumulative_relfreq = ifelse(cum_total == 0, 1e-6, cum_freq / cum_total),
+    cumulative_ppt = cumulative_relfreq * 1000
+  )
+
+  saveRDS(functionword_relfreq, "functionword_relfreq.RDS")
+
+```
+
+```{r}
+functionword_relfreq %>%
+ filter(gloss=="nein") 
+```
+
+
+```{r negation_no}
+functionword_relfreq %>%
+  filter(gloss=="nein") %>%
+  #filter(target_child_age > 10) %>%
+  # mutate(speaker_role = ifelse(speaker_role %in% c("Mother", "Father"),
+  #                              "Parent",
+  #                              speaker_role)) %>%
+
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker_role) +
+  theme_bw() + 
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+
+```
+
+
+```{r negation_no}
+functionword_relfreq %>%
+  filter(gloss=="nicht") %>%
+  #filter(target_child_age > 10) %>%
+  # mutate(speaker_role = ifelse(speaker_role %in% c("Mother", "Father"),
+  #                              "Parent",
+  #                              speaker_role)) %>%
+
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker_role) +
+  theme_bw() + 
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+
+```
+
+```{r negation_no}
+functionword_relfreq %>%
+  filter(gloss=="kein") %>%
+  #filter(target_child_age > 10) %>%
+  # mutate(speaker_role = ifelse(speaker_role %in% c("Mother", "Father"),
+  #                              "Parent",
+  #                              speaker_role)) %>%
+
+  ggplot(aes(target_child_age, cumulative_ppt)) +
+  geom_point() +
+  facet_grid(.~speaker_role) +
+  theme_bw() + 
+  xlab("Age (Months)") + ylab("Cumulative Parts Per Thousand")
+
+```
+#compare the number of the negator in each langauge, and the negator in each langauge, and no in Spanish --> do you get same or different numbers
+#Have a graph that has the curves for all of these words, 
+#Have a big growth curves with all the different negation words across the different langauges 
+
+
+```{r Neg_No_Growth_Model, include=FALSE}
+neg_nein_lagModel <- brm(
+ 
+  bf(
+    cumulative_ppt ~ upperAsymptote * exp(
+      -exp(((growthRate * exp(1)) / upperAsymptote) * (lag - target_child_age) + 1)
+    ),
+    upperAsymptote ~ 1,
+    growthRate ~ 1,
+    lag ~ 1,
+    nl = TRUE
+  ),
+  
+  data = filter(
+    functionword_relfreq,
+    gloss == "nein",
+    speaker_role == "Target_Child"
+    
+  ),
+  
+  #this is often what you have to change
+ 
+  prior = c(
+    prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+    prior(uniform(0, 20), nlpar = "growthRate", lb = 0, ub = 20),
+    prior(uniform(0, 72), nlpar = "lag", lb = 0, ub = 72)
+  ),
+
+  iter = 10000,
+  file = "German_neg_nein_lag_model_fit21"
+)
+
+
+```
+
+
+this is calculating the age of production for the curve 
+this also helps set the age boundaries for the bayesian model
+
+```{r age_of_production_nein}
+
+
+summ <- fixef(neg_nein_lagModel)
+
+age_of_production_nein <- data.frame(
+  gloss = "nein",
+  Estimate  = round(summ["lag_Intercept", "Estimate"], 1),
+  Est.Error = round(summ["lag_Intercept", "Est.Error"], 1),
+  Q2.5      = round(summ["lag_Intercept", "Q2.5"], 1),
+  Q97.5     = round(summ["lag_Intercept", "Q97.5"], 1)
+)
+
+saveRDS(age_of_production_nein, "../processed_data/age_of_production_nein.RDS")
+
+```
+
+
+fits it into the model 
+
+```{r neg_nein_predictions}
+neg_nein_predictions <- as.data.frame(fitted(neg_nein_lagModel))
+
+neg_nein_childdata <- filter(functionword_relfreq, gloss == "nein", speaker_role=="Target_Child")
+neg_nein_childdata$predictions <- neg_nein_predictions[, "Estimate"]
+
+saveRDS(neg_nein_childdata, "../processed_data/neg_neinGerman_childdata.RDS")
+```
+
+this code plots the graph of the cumalative relative frequency of child age per month versus parts per thousand e 
+```{r neg_nein_prediction_Plot} 
+nein_plot <-
+  ggplot(neg_nein_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Nein", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(linewidth = 20, hjust = 0.5),
+    axis.title.x = element_text(linewidth= 16),
+    axis.title.y = element_text(linewidth = 16),
+    axis.text.x = element_text(linewidth= 14),
+    axis.text.y = element_text(linewidth= 14),
+    legend.title = element_text(linewidth = 14),
+    legend.text  = element_text(linewidth = 12)
+  )
+
+print(nein_plot)
+```
+#nicht
+
+
+```{r Neg_No_Growth_Model, include=FALSE}
+neg_nicht_lagModel <- brm(
+ 
+  bf(
+    cumulative_ppt ~ upperAsymptote * exp(
+      -exp(((growthRate * exp(1)) / upperAsymptote) * (lag - target_child_age) + 1)
+    ),
+    upperAsymptote ~ 1,
+    growthRate ~ 1,
+    lag ~ 1,
+    nl = TRUE
+  ),
+  
+  data = filter(
+    functionword_relfreq,
+    gloss == "nicht",
+    speaker_role == "Target_Child"
+    
+  ),
+  
+  #this is often what you have to change
+ 
+  prior = c(
+    prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+  ),
+
+  iter = 10000,
+  file = "German_neg_nicht_lag_model_fit16"
+)
+
+
+```
+
+
+this is calculating the age of production for the curve 
+this also helps set the age boundaries for the bayesian model
+
+```{r age_of_production_nicht}
+
+
+summ <- fixef(neg_nicht_lagModel)
+
+age_of_production_nicht <- data.frame(
+  gloss = "nicht",
+  Estimate  = round(summ["lag_Intercept", "Estimate"], 1),
+  Est.Error = round(summ["lag_Intercept", "Est.Error"], 1),
+  Q2.5      = round(summ["lag_Intercept", "Q2.5"], 1),
+  Q97.5     = round(summ["lag_Intercept", "Q97.5"], 1)
+  
+  
+)
+
+saveRDS(age_of_production_nicht, "../processed_data/age_of_production_nicht.RDS")
+
+```
+
+
+fits it into the model 
+
+```{r neg_no_predictions}
+neg_no_predictions <- as.data.frame(fitted(neg_nicht_lagModel))
+
+neg_nicht_childdata <- filter(functionword_relfreq, gloss == "nicht", speaker_role=="Target_Child")
+neg_nicht_childdata$predictions <- neg_no_predictions[, "Estimate"]
+
+saveRDS(neg_nicht_childdata, "../processed_data/neg_nichtGerman_childdata.RDS")
+```
+
+this code plots the graph of the cumalative relative frequency of child age per month versus parts per thousand e 
+```{r neg_nicht_prediction_Plot} 
+nicht_plot <-
+  ggplot(neg_nicht_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Nicht", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(linewidth = 20, hjust = 0.5),
+    axis.title.x = element_text(linewidth= 16),
+    axis.title.y = element_text(linewidth = 16),
+    axis.text.x = element_text(linewidth= 14),
+    axis.text.y = element_text(linewidth= 14),
+    legend.title = element_text(linewidth = 14),
+    legend.text  = element_text(linewidth = 12)
+  )
+
+print(nicht_plot)
+```
+#kein
+```{r Neg_Kein_Growth_Model, include=FALSE}
+neg_kein_lagModel <- brm(
+ 
+  bf(
+    cumulative_ppt ~ upperAsymptote * exp(
+      -exp(((growthRate * exp(1)) / upperAsymptote) * (lag - target_child_age) + 1)
+    ),
+    upperAsymptote ~ 1,
+    growthRate ~ 1,
+    lag ~ 1,
+    nl = TRUE
+  ),
+  
+  data = filter(
+    functionword_relfreq,
+    gloss == "kein",
+    speaker_role == "Target_Child"
+    
+  ),
+  
+  #this is often what you have to change
+ 
+  prior = c(
+    prior(uniform(0, 80), nlpar = "upperAsymptote", lb = 0, ub = 80),
+    prior(uniform(0, 10), nlpar = "growthRate", lb = 0, ub = 10),
+    prior(uniform(10, 72), nlpar = "lag", lb = 10, ub = 72)
+  ),
+
+  iter = 10000,
+  file = "German_neg_kein_lag_model_fit16"
+)
+
+
+```
+
+
+this is calculating the age of production for the curve 
+this also helps set the age boundaries for the bayesian model
+
+```{r age_of_production_kein}
+
+
+summ <- fixef(neg_kein_lagModel)
+
+age_of_production_kein <- data.frame(
+  gloss = "kein",
+  Estimate  = round(summ["lag_Intercept", "Estimate"], 1),
+  Est.Error = round(summ["lag_Intercept", "Est.Error"], 1),
+  Q2.5      = round(summ["lag_Intercept", "Q2.5"], 1),
+  Q97.5     = round(summ["lag_Intercept", "Q97.5"], 1)
+)
+
+saveRDS(age_of_production_kein, "../processed_data/age_of_production_kein.RDS")
+
+```
+
+
+fits it into the model 
+
+```{r neg_kein_predictions}
+neg_kein_predictions <- as.data.frame(fitted(neg_kein_lagModel))
+
+neg_kein_childdata <- filter(functionword_relfreq, gloss == "kein", speaker_role=="Target_Child")
+neg_kein_childdata$predictions <- neg_kein_predictions[, "Estimate"]
+
+saveRDS(neg_kein_childdata, "../processed_data/neg_keinGerman_childdata.RDS")
+```
+
+this code plots the graph of the cumalative relative frequency of child age per month versus parts per thousand e 
+```{r neg_kein_prediction_Plot} 
+kein_plot <-
+  ggplot(neg_kein_childdata, aes(x = target_child_age, y = cumulative_ppt)) +
+  geom_point(aes(color = "Actual Data"), size = 2) + # Original data points
+  geom_line(aes(y = predictions, color = "Fitted Values"), size = 1) + # Fitted values
+  scale_color_manual(name = "Legend", values = c("Actual Data" = "black", "Fitted Values" = "blue")) +
+  theme_bw() + labs(title="Kein", x="Child Age (Month)", y="Parts per Thousand") + 
+  theme(legend.position = "none") +   
+  theme(
+    plot.title = element_text(linewidth = 20, hjust = 0.5),
+    axis.title.x = element_text(linewidth= 16),
+    axis.title.y = element_text(linewidth = 16),
+    axis.text.x = element_text(linewidth= 14),
+    axis.text.y = element_text(linewidth= 14),
+    legend.title = element_text(linewidth = 14),
+    legend.text  = element_text(linewidth = 12)
+  )
+
+print(kein_plot)
+```
+#combined age of production
+```{r}
+age_of_production <-
+  bind_rows(age_of_production_nein,
+            age_of_production_nicht,
+            age_of_production_kein) %>%
+  mutate(gloss = fct_reorder(gloss, Estimate),
+         Estimate = as.numeric(Estimate),
+         Q2.5 = as.numeric(Q2.5),
+         Q97.5 = as.numeric(Q97.5))
+
+saveRDS(age_of_production, "../processed_data/age_of_production_german.RDS")
+```
+
+# Age of Production Plot
+
+```{r}
+age_of_production <- 
+  age_of_production %>%
+  mutate(gloss = fct_reorder(gloss, Estimate), 
+         Estimate = as.numeric(age_of_production$Estimate),
+         Q2.5 = as.numeric(age_of_production$Q2.5),
+         Q97.5 = as.numeric(age_of_production$Q97.5))
+
+saveRDS(age_of_production, "../processed_data/age_of_production_kein.RDS")
+```
+
+```{r}
+age_of_production <- readRDS("../processed_data/age_of_production_german.RDS")
+
+functionword_onsetage_plot <-
+  age_of_production %>%
+  mutate(gloss = fct_reorder(gloss, Estimate)) %>%
+  ggplot(aes(x=Estimate, y=gloss)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() + 
+  theme(axis.text.y = element_text(size = 12), xlab="age") +
+  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
+  labs(x = "Age (Months)", y="") +
+  theme(text = element_text(size = 12))
+
+print(functionword_onsetage_plot)
+```
+
+
+```{r}
+# Read all three
+nein  <- readRDS("../processed_data/age_of_production_nein.RDS")
+nicht <- readRDS("../processed_data/age_of_production_nicht.RDS")
+kein  <- readRDS("../processed_data/age_of_production_kein.RDS")
+
+# Combine and plot
+bind_rows(nein, nicht, kein) %>%
+  mutate(gloss = fct_reorder(gloss, Estimate)) %>%
+  ggplot(aes(x = Estimate, y = gloss)) +
+  geom_pointrange(aes(xmin = Q2.5, xmax = Q97.5)) +
+  theme_bw() +
+  theme(axis.text.y = element_text(size = 12),
+        text = element_text(size = 12)) +
+  scale_x_continuous(breaks = seq(0, 72, by = 3)) +
+  labs(x = "Age (Months)", y = "")
+
+```
+
+```{r}
+german_negation <- map_dfr(list(
+  "../processed_data/age_of_production_neinF.RDS",
+  "../processed_data/age_of_production_nichtF.RDS",
+  "../processed_data/age_of_production_kein.RDS"
+), readRDS)
+
+saveRDS(german_negation, "../processed_data/age_of_production_germanFINAL.RDS")
+
+
+```
+
+```{r}
+german_negation <- map_dfr(list(
+  "../processed_data/age_of_production_neinF.RDS",
+  "../processed_data/age_of_production_nichtF.RDS",
+  "../processed_data/age_of_production_kein.RDS"
+), readRDS)
+
+```
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
